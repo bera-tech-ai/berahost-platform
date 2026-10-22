@@ -110,7 +110,7 @@ export async function startWebDeployment(id: number): Promise<void> {
     let pkg: any = {};
     try { pkg = JSON.parse(await fs.readFile(packagePath, "utf8")); } catch { /* static repository */ }
     const installCommand = await fs.access(path.join(root, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(root, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --no-audit --no-fund"));
-    if (pkg.scripts || Object.keys(pkg).length === 0) {
+    if (pkg.scripts) {
       const installLog = await run(installCommand, root, envVars);
       await db.update(webDeploymentsTable).set({ buildLog: `Dependencies installed.\n${installLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
     }
@@ -120,7 +120,8 @@ export async function startWebDeployment(id: number): Promise<void> {
       await db.update(webDeploymentsTable).set({ buildLog: `Build completed.\n${buildLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
     }
     const candidates = ["dist", "build", "out", "public"].map((dir) => path.join(root, dir));
-    const staticRoot = (await Promise.all(candidates.map(async (candidate) => (await fs.stat(candidate).catch(() => null))?.isDirectory() ? candidate : null))).find(Boolean) as string | undefined;
+    let staticRoot = (await Promise.all(candidates.map(async (candidate) => (await fs.stat(candidate).catch(() => null))?.isDirectory() ? candidate : null))).find(Boolean) as string | undefined;
+    if (!staticRoot && !pkg.scripts && (await fs.stat(path.join(root, "index.html")).catch(() => null))?.isFile()) staticRoot = root;
     const startCommand = deployment.startCommand || (pkg.scripts?.start ? "npm start" : "");
     if (staticRoot && !startCommand) {
       await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot), runtimePort: null, pid: null, buildLog: "Static site built and ready.", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
