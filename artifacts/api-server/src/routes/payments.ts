@@ -72,9 +72,13 @@ router.post("/payments/subscribe", requireAny("payments"), async (req, res): Pro
 
 router.post("/payments/domain", requireAny("payments"), async (req, res): Promise<void> => {
   const user = (req as any).user;
-  const phone = normalizePhone(String(req.body?.phone || ""));
   const orderId = Number(req.body?.orderId);
   const [order] = await db.select().from(domainOrdersTable).where(and(eq(domainOrdersTable.id, orderId), eq(domainOrdersTable.userId, user.id)));
+  if (user.isAdmin && order?.status === "paid" && order.priceKes === 0) {
+    res.json({ message: "Administrator domain enabled at no charge.", amountKes: 0, adminFree: true });
+    return;
+  }
+  const phone = normalizePhone(String(req.body?.phone || ""));
   if (!order || order.status !== "pending" || !phone) { res.status(400).json({ error: "A pending domain order and valid Kenyan phone number are required." }); return; }
   try {
     const txn = await createPayheroPayment(user.id, phone, DOMAIN_PRICE_KES, `domain:${order.id}`);

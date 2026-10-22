@@ -83,15 +83,16 @@ router.post("/web-deployments/:id/stop", requireAny("write"), async (req, res): 
 router.post("/web-deployments/:id/domains", requireAny("payments"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const entitlement = await activeUser(user.id);
-  if (!entitlement || (!entitlement.user.isAdmin && entitlement.plan.id !== "gold")) { res.status(403).json({ error: "Custom domain requests are available on the Gold plan." }); return; }
+  if (!entitlement || (!user.isAdmin && entitlement.plan.id !== "gold")) { res.status(403).json({ error: "Custom domain requests are available on the Gold plan." }); return; }
   const id = Number(req.params.id);
   const hostname = String(req.body?.hostname || "").trim().toLowerCase();
   if (!/^(?=.{4,255}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname)) { res.status(400).json({ error: "Enter a valid domain name" }); return; }
   const [deployment] = await db.select().from(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
   if (!deployment) { res.status(404).json({ error: "Web deployment not found" }); return; }
   const token = `bera-verify-${crypto.randomBytes(16).toString("hex")}`;
-  const [order] = await db.insert(domainOrdersTable).values({ userId: user.id, webDeploymentId: id, hostname, priceKes: 134, verificationToken: token, status: "pending" }).returning();
-  res.status(201).json({ id: order.id, hostname, amountKes: 134, verificationToken: token, message: "Domain request created. Complete the KES 134 PayHero payment, then add the verification TXT record shown here." });
+  const adminFree = Boolean(user.isAdmin);
+  const [order] = await db.insert(domainOrdersTable).values({ userId: user.id, webDeploymentId: id, hostname, priceKes: adminFree ? 0 : 134, verificationToken: token, status: adminFree ? "paid" : "pending" }).returning();
+  res.status(201).json({ id: order.id, hostname, amountKes: adminFree ? 0 : 134, adminFree, verificationToken: token, message: adminFree ? "Domain request created for the administrator at no charge. Add the verification TXT record shown here." : "Domain request created. Complete the KES 134 PayHero payment, then add the verification TXT record shown here." });
 });
 
 router.post("/web-deployments/domains/:id/verify", requireAny("write"), async (req, res): Promise<void> => {
