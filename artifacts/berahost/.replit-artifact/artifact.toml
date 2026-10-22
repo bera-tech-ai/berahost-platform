@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "BERAHOST"
+description = "A self-hosted WhatsApp bot hosting platform with a dashboard for deploying and managing bots, real-time logs, pairing codes, teams, marketplace tools, billing, and an AI guide."
+version = "1.0.0"
+id = "artifacts/berahost"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23312
+
+[services.development]
+run = "pnpm --filter @workspace/berahost run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/berahost", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/berahost/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23312"
+BASE_PATH = "/"
