@@ -163,6 +163,11 @@ export async function stopWebDeployment(id: number): Promise<void> {
   await db.update(webDeploymentsTable).set({ status: "stopped", pid: null, runtimePort: null, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
 }
 
+export async function deleteWebDeployment(id: number): Promise<void> {
+  await stopWebDeployment(id);
+  await fs.rm(deploymentRoot(id), { recursive: true, force: true });
+}
+
 async function resolveDeployment(reqPath: string, host: string) {
   const slug = reqPath.split("/").filter(Boolean)[1];
   if (slug && isSafeSlug(slug)) {

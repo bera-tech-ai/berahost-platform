@@ -5,7 +5,7 @@ import { db, webDeploymentsTable, domainOrdersTable, usersTable, deploymentsTabl
 import { and, desc, eq } from "drizzle-orm";
 import { requireAny } from "../middlewares/requireAuth";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
-import { generateSlug, normalizeGithubUrl, startWebDeployment, stopWebDeployment } from "../lib/webProcess";
+import { deleteWebDeployment, generateSlug, normalizeGithubUrl, startWebDeployment, stopWebDeployment } from "../lib/webProcess";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -78,6 +78,18 @@ router.post("/web-deployments/:id/stop", requireAny("write"), async (req, res): 
   if (!row) { res.status(404).json({ error: "Web deployment not found" }); return; }
   await stopWebDeployment(id);
   res.json({ message: "Web deployment stopped" });
+});
+
+router.delete("/web-deployments/:id", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const [row] = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
+  if (!row) { res.status(404).json({ error: "Web deployment not found" }); return; }
+
+  await deleteWebDeployment(id);
+  await db.delete(domainOrdersTable).where(and(eq(domainOrdersTable.webDeploymentId, id), eq(domainOrdersTable.userId, user.id)));
+  await db.delete(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
+  res.json({ message: "Web deployment deleted" });
 });
 
 router.post("/web-deployments/:id/domains", requireAny("payments"), async (req, res): Promise<void> => {
