@@ -54,6 +54,19 @@ async function run(command: string, cwd: string, env: Record<string, string>, ti
   return `${result.stdout || ""}${result.stderr || ""}`.slice(-120000);
 }
 
+async function downloadGithubRepository(repoUrl: string, branch: string, root: string): Promise<void> {
+  const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (!match) throw new Error("Only public GitHub repositories are supported.");
+  const owner = match[1];
+  const repository = match[2];
+  const response = await fetch(`https://codeload.github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tar.gz/refs/heads/${encodeURIComponent(branch)}`);
+  if (!response.ok) throw new Error(`GitHub repository download failed (${response.status}). Check that the repository and branch are public and valid.`);
+  const archive = path.join(root, ".github-source.tar.gz");
+  await fs.writeFile(archive, Buffer.from(await response.arrayBuffer()));
+  await execFileAsync("tar", ["-xzf", archive, "-C", root, "--strip-components=1"], { timeout: 5 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
+  await fs.rm(archive, { force: true });
+}
+
 function publicBaseUrl() {
   return (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "")).replace(/\/$/, "");
 }
@@ -72,7 +85,7 @@ export async function startWebDeployment(id: number): Promise<void> {
     await db.update(webDeploymentsTable).set({ status: "building", updatedAt: new Date(), buildLog: "Cloning repository..." }).where(eq(webDeploymentsTable.id, id));
     await fs.rm(root, { recursive: true, force: true });
     await fs.mkdir(root, { recursive: true });
-    await run(`git clone --depth=1 --branch ${JSON.stringify(deployment.branch)} ${JSON.stringify(repo)} ${JSON.stringify(root)}`, process.cwd(), {});
+    await downloadGithubRepository(repo, deployment.branch, root);
     const scannedVars = await scanWebEnv(root);
     await db.update(webDeploymentsTable).set({ scannedVars, buildLog: "Repository cloned. Installing dependencies..." }).where(eq(webDeploymentsTable.id, id));
     const packagePath = path.join(root, "package.json");
