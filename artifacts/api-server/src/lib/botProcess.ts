@@ -284,6 +284,7 @@ async function downloadGithubRepository(repoUrl: string, deployPath: string): Pr
   if (!branch || !/^[A-Za-z0-9._/-]{1,120}$/.test(branch) || branch.includes("..")) throw new Error("GitHub repository has an invalid default branch.");
   const response = await fetch(`https://codeload.github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tar.gz/refs/heads/${encodeURIComponent(branch)}`);
   if (!response.ok) throw new Error(`GitHub repository download failed (${response.status}). Check that the repository and default branch are public and valid.`);
+  await fs.mkdir(deployPath, { recursive: true });
   const archive = path.join(deployPath, ".github-source.tar.gz");
   await fs.writeFile(archive, Buffer.from(await response.arrayBuffer()));
   await execFileAsync("tar", ["-xzf", archive, "-C", deployPath, "--strip-components=1"], { timeout: 5 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
