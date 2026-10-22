@@ -6,7 +6,7 @@ import { FREE_PLAN, SUBSCRIPTION_PLANS, getPlan, isSubscriptionActive } from "..
 
 const router = Router();
 router.get("/subscriptions/plans", async (_req, res): Promise<void> => {
-  res.json([FREE_PLAN, ...Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxDeployments, webLimit: plan.maxDeployments }))]);
+  res.json([FREE_PLAN, ...Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxBots, webLimit: plan.maxWebApps }))]);
 });
 router.get("/subscriptions/status", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;

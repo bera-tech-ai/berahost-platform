@@ -17,18 +17,18 @@ const PLAN_DETAILS = [
     features: ["Renew to deploy", "Stored deployments remain visible"], excluded: []
   },
   {
-    id: "starter", name: "Starter", kes: 200, maxBots: 5,
-    features: ["5 bots or web applications", "Hosted URL", "Env configuration scan"],
+    id: "starter", name: "Starter", kes: 70, maxBots: 1,
+    features: ["1 bot + 1 web application", "Hosted URL", "Env configuration scan"],
     excluded: []
   },
   {
     id: "silver", name: "Silver", kes: 500, maxBots: 13,
-    features: ["13 bots or web applications", "Priority runtime", "GitHub web deploys"],
+    features: ["13 bots + 13 web applications", "Priority runtime", "GitHub web deploys"],
     excluded: []
   },
   {
     id: "gold", name: "Gold", kes: 800, maxBots: 30,
-    features: ["30 bots or web applications", "Custom domain requests", "Priority support"],
+    features: ["30 bots + 30 web applications", "Custom domain requests", "Priority support"],
     excluded: []
   },
 ];

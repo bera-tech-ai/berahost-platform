@@ -365,6 +365,11 @@ function detectSystemDeps(pkg: any): string {
   return Array.from(found).join(", ");
 }
 
+function detectInstallPackages(pkg: any): string {
+  const allDeps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  return Object.keys(allDeps).filter((name) => !["typescript", "nodemon", "eslint", "prettier"].includes(name)).join(", ");
+}
+
 // Sync env vars + metadata from GitHub repo
 router.post("/admin/bots/sync-vars", requireAdmin, async (req, res): Promise<void> => {
   const { repoUrl } = req.body;
@@ -396,17 +401,14 @@ router.post("/admin/bots/sync-vars", requireAdmin, async (req, res): Promise<voi
 
     // ── 2. Fetch env/config vars ────────────────────────────────────────────
     const candidates: { path: string; type: "env" | "json" | "js" }[] = [
-      { path: ".env.example", type: "env" },
-      { path: ".env",         type: "env" },
-      { path: "config.json",  type: "json" },
-      { path: "config.js",    type: "js" },
-      { path: "config.cjs",   type: "js" },
+      ...[".env.example", ".env", ".env.local", ".env.production", ".env.development", "config.env", "config/.env"].map(path => ({ path, type: "env" as const })),
+      ...["config.json", "settings.json"].map(path => ({ path, type: "json" as const })),
+      ...["config.js", "config.cjs", "config.mjs", "settings.js", "settings.cjs", "settings.mjs", "setting.js", "setting.cjs", "env.js", "env.cjs"].map(path => ({ path, type: "js" as const })),
     ];
 
-    let vars: SyncVar[] = [];
-    let foundFile: string | null = null;
+    const merged = new Map<string, SyncVar>();
+    const foundFiles: string[] = [];
 
-    outer:
     for (const branch of [activeBranch, ...branches.filter(b => b !== activeBranch)]) {
       for (const { path, type } of candidates) {
         const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
@@ -414,13 +416,16 @@ router.post("/admin/bots/sync-vars", requireAdmin, async (req, res): Promise<voi
         if (!response.ok) continue;
         const content = await response.text();
 
-        if (type === "env")  vars = parseEnvFile(content);
-        if (type === "json") vars = parseJsonConfig(content);
-        if (type === "js")   vars = parseJsConfig(content);
-
-        if (vars.length > 0) { foundFile = path; break outer; }
+        const vars = type === "env" ? parseEnvFile(content) : type === "json" ? parseJsonConfig(content) : parseJsConfig(content);
+        if (vars.length > 0) {
+          foundFiles.push(path);
+          for (const variable of vars) if (!merged.has(variable.key)) merged.set(variable.key, variable);
+        }
       }
+      if (foundFiles.length > 0) break;
     }
+    const vars = [...merged.values()];
+    const foundFile = foundFiles.length ? foundFiles.join(", ") : null;
 
     // ── 3. Build metadata from package.json ────────────────────────────────
     const meta = {
@@ -429,6 +434,7 @@ router.post("/admin/bots/sync-vars", requireAdmin, async (req, res): Promise<voi
       startCommand: detectStartCommand(pkgJson),
       platform: detectPlatform(pkgJson, repo),
       systemDeps: detectSystemDeps(pkgJson),
+      installPackages: detectInstallPackages(pkgJson),
       version: pkgJson?.version || null,
     };
 
@@ -441,7 +447,7 @@ router.post("/admin/bots/sync-vars", requireAdmin, async (req, res): Promise<voi
       return;
     }
 
-    res.json({ vars, repoOwner: owner, repoName: repo, sourceFile: foundFile, meta });
+    res.json({ vars, repoOwner: owner, repoName: repo, sourceFile: foundFile, sourceFiles: foundFiles, meta });
   } catch (err) {
     logger.error({ err }, "Failed to sync vars from GitHub");
     res.status(500).json({ error: "Failed to fetch repository data" });
@@ -454,7 +460,7 @@ router.get("/admin/bots", requireAdmin, async (req, res): Promise<void> => {
 });
 
 router.post("/admin/bots", requireAdmin, async (req, res): Promise<void> => {
-  const { name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, startCommand } = req.body;
+  const { name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, installPackages, startCommand } = req.body;
 
   if (!name || !repoUrl || !platform) {
     res.status(400).json({ error: "name, repoUrl, and platform are required" });
@@ -463,7 +469,7 @@ router.post("/admin/bots", requireAdmin, async (req, res): Promise<void> => {
 
   const [bot] = await db
     .insert(botsTable)
-    .values({ name, repoUrl, description, platform, isFeatured: isFeatured || false, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, startCommand })
+    .values({ name, repoUrl, description, platform, isFeatured: isFeatured || false, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, installPackages, startCommand })
     .returning();
 
   res.status(201).json(serializeBot(bot, true));
@@ -471,11 +477,11 @@ router.post("/admin/bots", requireAdmin, async (req, res): Promise<void> => {
 
 router.put("/admin/bots/:id", requireAdmin, async (req, res): Promise<void> => {
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
-  const { name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, startCommand } = req.body;
+  const { name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, installPackages, startCommand } = req.body;
 
   const [bot] = await db
     .update(botsTable)
-    .set({ name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, startCommand })
+    .set({ name, repoUrl, description, platform, isFeatured, requiredVars, optionalVars, sessionGuideUrl, sessionPrefix, sqliteSettingsPaths, systemDeps, installPackages, startCommand })
     .where(eq(botsTable.id, id))
     .returning();
 

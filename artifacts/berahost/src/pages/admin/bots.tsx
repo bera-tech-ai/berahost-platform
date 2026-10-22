@@ -71,6 +71,7 @@ interface BotFormData {
   startCommand: string;
   isFeatured: boolean;
   systemDeps: string;
+  installPackages: string;
   requiredVars: VarEntry[];
   optionalVars: VarEntry[];
 }
@@ -84,6 +85,7 @@ const EMPTY_FORM: BotFormData = {
   startCommand: "npm start",
   isFeatured: false,
   systemDeps: "",
+  installPackages: "",
   requiredVars: [],
   optionalVars: [],
 };
@@ -246,6 +248,7 @@ export default function AdminBots() {
       startCommand: bot.startCommand || "npm start",
       isFeatured: bot.isFeatured || false,
       systemDeps: (bot.systemDeps || []).join(", "),
+      installPackages: (bot.installPackages || []).join(", "),
       requiredVars: parseVars(bot.requiredVars),
       optionalVars: parseVars(bot.optionalVars),
     });
@@ -295,6 +298,10 @@ export default function AdminBots() {
           if (meta.systemDeps) {
             updates.systemDeps = meta.systemDeps;
             detected.push(`sys deps: ${meta.systemDeps}`);
+          }
+          if (meta.installPackages) {
+            updates.installPackages = meta.installPackages;
+            detected.push(`packages detected`);
           }
 
           return { ...f, ...updates };
@@ -365,6 +372,7 @@ export default function AdminBots() {
       sessionGuideUrl: form.sessionGuideUrl || null,
       startCommand: form.startCommand || null,
       systemDeps: form.systemDeps ? form.systemDeps.split(",").map((s) => s.trim()).filter(Boolean) : null,
+      installPackages: form.installPackages ? form.installPackages.split(",").map((s) => s.trim()).filter(Boolean) : null,
       requiredVars: buildVarsObj(form.requiredVars),
       optionalVars: buildVarsObj(form.optionalVars),
     };
@@ -613,6 +621,16 @@ export default function AdminBots() {
                       className="bg-background/50 font-mono"
                     />
                   </div>
+                  <div className="space-y-2 col-span-2">
+                    <Label className="font-mono text-xs uppercase text-muted-foreground">Extra npm Packages (comma-separated)</Label>
+                    <Input
+                      value={form.installPackages}
+                      onChange={(e) => setForm((f) => ({ ...f, installPackages: e.target.value }))}
+                      placeholder="sharp, better-sqlite3, @whiskeysockets/baileys"
+                      className="bg-background/50 font-mono"
+                    />
+                    <p className="text-[10px] text-muted-foreground font-mono">Package.json dependencies are installed automatically. Add packages here when the template needs extras.</p>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-3 p-3 rounded-lg border border-secondary/20 bg-secondary/5">
@@ -637,7 +655,7 @@ export default function AdminBots() {
                 <div className="p-3 rounded-lg border border-primary/20 bg-primary/5 flex items-start gap-2">
                   <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <p className="text-xs font-mono text-muted-foreground">
-                    Use the <span className="text-primary">SYNC</span> button on the Basic tab to auto-import variables. It automatically detects <span className="text-primary">.env.example</span>, <span className="text-primary">.env</span>, <span className="text-primary">config.json</span>, <span className="text-primary">config.js</span>, or <span className="text-primary">config.cjs</span> from the repo. You can then edit them manually here.
+                    Use <span className="text-primary">SYNC</span> to merge variables from .env, config.env, config/settings JSON, JS, CJS, MJS, setting.js and related files across the repository. Dependencies are installed automatically; use the package field on the Basic tab for extra npm packages.
                   </p>
                 </div>
 

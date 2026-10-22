@@ -57,6 +57,20 @@ async function run(command: string, cwd: string, env: Record<string, string>, ti
   return `${result.stdout || ""}${result.stderr || ""}`.slice(-120000);
 }
 
+function detectBuildCommand(pkg: any): string {
+  if (pkg?.scripts?.build) return "npm run build";
+  if (pkg?.scripts?.compile) return "npm run compile";
+  return "";
+}
+
+function detectStartCommand(pkg: any, hasStaticOutput: boolean): string {
+  if (hasStaticOutput) return "";
+  if (pkg?.scripts?.start) return "npm start";
+  for (const name of ["serve", "app", "run", "launch", "begin", "dev"]) if (pkg?.scripts?.[name]) return `npm run ${name}`;
+  if (pkg?.main) return `node ${pkg.main}`;
+  return "";
+}
+
 async function waitForPort(port: number, child: ReturnType<typeof spawn>, timeoutMs = 30_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -125,7 +139,7 @@ export async function startWebDeployment(id: number): Promise<void> {
       const installLog = await run(installCommand, root, envVars);
       await db.update(webDeploymentsTable).set({ buildLog: `Dependencies installed.\n${installLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
     }
-    const buildCommand = deployment.buildCommand || (pkg.scripts?.build ? "npm run build" : "");
+    const buildCommand = deployment.buildCommand || detectBuildCommand(pkg);
     if (buildCommand) {
       const buildLog = await run(buildCommand, root, { ...envVars, PORT: String(port) });
       await db.update(webDeploymentsTable).set({ buildLog: `Build completed.\n${buildLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
@@ -133,7 +147,7 @@ export async function startWebDeployment(id: number): Promise<void> {
     const candidates = ["dist", "build", "out", "public"].map((dir) => path.join(root, dir));
     let staticRoot = (await Promise.all(candidates.map(async (candidate) => (await fs.stat(candidate).catch(() => null))?.isDirectory() ? candidate : null))).find(Boolean) as string | undefined;
     if (!staticRoot && !pkg.scripts && (await fs.stat(path.join(root, "index.html")).catch(() => null))?.isFile()) staticRoot = root;
-    const startCommand = deployment.startCommand || (pkg.scripts?.start ? "npm start" : "");
+    const startCommand = deployment.startCommand || detectStartCommand(pkg, Boolean(staticRoot));
     if (staticRoot && !startCommand) {
       await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot) || ".", runtimePort: null, pid: null, buildLog: "Static site built and ready.", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
       return;

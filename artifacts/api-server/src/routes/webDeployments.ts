@@ -21,7 +21,7 @@ function serialize(row: any) {
 async function activeUser(userId: number) {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
   if (!user || user.isBanned || user.deletedAt) return null;
-  if (user.isAdmin) return { user, plan: { id: "admin", name: "Administrator", maxDeployments: 9999, priceKes: 0, features: ["Administrator access"] } };
+  if (user.isAdmin) return { user, plan: { id: "admin", name: "Administrator", maxDeployments: 9999, maxBots: 9999, maxWebApps: 9999, priceKes: 0, features: ["Administrator access"] } };
   return isSubscriptionActive(user) ? { user, plan: getPlan(user.subscriptionPlan) } : null;
 }
 
@@ -74,8 +74,7 @@ router.post("/web-deployments", requireAny("write"), async (req, res): Promise<v
   const branch = String(req.body?.branch || defaultBranch).trim();
   if (!/^[A-Za-z0-9._/-]{1,120}$/.test(branch) || branch.includes("..")) { res.status(400).json({ error: "Invalid branch name" }); return; }
   const existing = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id));
-  const botRows = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
-  if (existing.length + botRows.length >= entitlement.plan.maxDeployments) { res.status(403).json({ error: `${entitlement.plan.name} supports up to ${entitlement.plan.maxDeployments} hosted deployments.`, limit: entitlement.plan.maxDeployments }); return; }
+  if (existing.length >= entitlement.plan.maxWebApps) { res.status(403).json({ error: `${entitlement.plan.name} supports up to ${entitlement.plan.maxWebApps} web apps.`, limit: entitlement.plan.maxWebApps }); return; }
   const envVars = typeof req.body?.envVars === "object" && req.body.envVars ? req.body.envVars : {};
   const autoDeploy = Boolean(selectedRepo) && req.body?.autoDeploy !== false;
   const [row] = await db.insert(webDeploymentsTable).values({ userId: user.id, repoUrl, githubRepoId, githubFullName, githubPrivate, branch, customName: typeof req.body?.customName === "string" ? req.body.customName.trim().slice(0, 100) || null : null, slug: generateSlug(), buildCommand: typeof req.body?.buildCommand === "string" ? req.body.buildCommand.trim() || null : null, startCommand: typeof req.body?.startCommand === "string" ? req.body.startCommand.trim() || null : null, envVars, expiresAt: user.subscriptionExpiresAt, status: "queued", autoDeploy }).returning();

@@ -21,6 +21,7 @@ export const botsTable = pgTable("bots", {
    */
   sqliteSettingsPaths: jsonb("sqlite_settings_paths"),
   systemDeps: text("system_deps").array(),
+  installPackages: text("install_packages").array(),
   startCommand: text("start_command"),
   version: integer("version").default(1).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

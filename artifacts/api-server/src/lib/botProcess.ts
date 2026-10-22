@@ -664,6 +664,7 @@ export async function startBotProcess(
           .select({
             sessionPrefix:      botsTable.sessionPrefix,
             sqliteSettingsPaths: botsTable.sqliteSettingsPaths,
+            installPackages: botsTable.installPackages,
             name:               botsTable.name,
           })
           .from(botsTable)
@@ -673,6 +674,11 @@ export async function startBotProcess(
     const sessionPrefix      = (botMeta as any)?.sessionPrefix as string | null | undefined;
     const sqliteSettingsPaths = ((botMeta as any)?.sqliteSettingsPaths as string[] | null) ?? [];
     const botName             = (botMeta as any)?.name as string | undefined;
+    const installPackages = Array.isArray((botMeta as any)?.installPackages) ? (botMeta as any).installPackages.filter((value: unknown) => typeof value === "string" && /^[A-Za-z0-9@/_:.+-]+$/.test(value)).join(" ") : "";
+    if (installPackages) {
+      await emitLog(deploymentId, `[BERAHOST] Installing template packages: ${installPackages}`, "info");
+      await execAsync(`npm_config_registry=https://registry.npmjs.org npm install --no-save --no-audit --no-fund ${installPackages}`, { cwd: deployPath, timeout: 15 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
+    }
 
     // Session prefix check — only warn when the bot declares a required prefix
     // AND the session ID doesn't start with it.

@@ -10,7 +10,7 @@ import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 
 const router = Router();
 
-const ADMIN_PLAN = { id: "admin", name: "Administrator", maxDeployments: 9999, priceKes: 0, features: ["Administrator access"] } as const;
+const ADMIN_PLAN = { id: "admin", name: "Administrator", maxDeployments: 9999, maxBots: 9999, maxWebApps: 9999, priceKes: 0, features: ["Administrator access"] } as const;
 function deploymentPlan(user: { isAdmin?: boolean; subscriptionPlan?: string | null }) {
   return user.isAdmin ? ADMIN_PLAN : getPlan(user.subscriptionPlan);
 }
@@ -81,8 +81,8 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
   }
   const plan = deploymentPlan(dbUser);
   const existingDeployments = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
-  if (existingDeployments.length >= plan.maxDeployments) {
-    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.`, limit: plan.maxDeployments });
+  if (existingDeployments.length >= plan.maxBots) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxBots} bots.`, limit: plan.maxDeployments });
     return;
   }
 
@@ -170,7 +170,7 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
     return;
   }
   const plan = deploymentPlan(dbUser);
-  const limit = plan.maxDeployments;
+  const limit = plan.maxBots;
 
   const [{ runningCount }] = await db
     .select({ runningCount: count() })
@@ -330,8 +330,8 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
   }
   const plan = deploymentPlan(dbUser);
   const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
-  if (hostedCount.length >= plan.maxDeployments) {
-    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
+  if (hostedCount.length >= plan.maxBots) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxBots} bots.` });
     return;
   }
 
@@ -495,8 +495,8 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
   }
   const plan = deploymentPlan(dbUser);
   const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
-  if (hostedCount.length >= plan.maxDeployments) {
-    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
+  if (hostedCount.length >= plan.maxBots) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxBots} bots.` });
     return;
   }
 

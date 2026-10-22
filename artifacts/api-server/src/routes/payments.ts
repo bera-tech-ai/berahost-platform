@@ -53,7 +53,7 @@ async function createPayheroPayment(userId: number, phone: string, amountKes: nu
 }
 
 router.get("/payments/plans", async (_req, res): Promise<void> => {
-  res.json({ subscriptionPlans: Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxDeployments, webLimit: plan.maxDeployments })) });
+  res.json({ subscriptionPlans: Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxBots, webLimit: plan.maxWebApps })) });
 });
 router.post("/payments/initiate", requireAny("payments"), async (_req, res): Promise<void> => {
   res.status(410).json({ error: "Coin purchases have been removed. Choose a monthly subscription instead." });
