@@ -70,7 +70,7 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
   }
 
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (!dbUser || !isSubscriptionActive(dbUser)) {
+  if (!dbUser || (!dbUser.isAdmin && !isSubscriptionActive(dbUser))) {
     res.status(402).json({ error: "An active monthly subscription is required before deploying a bot." });
     return;
   }
@@ -160,7 +160,7 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
   }
 
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (!dbUser || !isSubscriptionActive(dbUser)) {
+  if (!dbUser || (!dbUser.isAdmin && !isSubscriptionActive(dbUser))) {
     res.status(402).json({ error: "Your subscription is inactive. Renew before starting this bot." });
     return;
   }
@@ -319,7 +319,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
   }
 
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (!dbUser || !isSubscriptionActive(dbUser)) {
+  if (!dbUser || (!dbUser.isAdmin && !isSubscriptionActive(dbUser))) {
     res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
     return;
   }
@@ -484,7 +484,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
   }
 
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (!dbUser || !isSubscriptionActive(dbUser)) {
+  if (!dbUser || (!dbUser.isAdmin && !isSubscriptionActive(dbUser))) {
     res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
     return;
   }

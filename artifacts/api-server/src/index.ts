@@ -296,7 +296,7 @@ async function main() {
 }
 
 async function reconcileExpiredSubscriptions() {
-  const expired = await db.select({ id: usersTable.id }).from(usersTable).where(and(lt(usersTable.subscriptionExpiresAt, new Date()), ne(usersTable.subscriptionPlan, "free")));
+  const expired = await db.select({ id: usersTable.id }).from(usersTable).where(and(lt(usersTable.subscriptionExpiresAt, new Date()), ne(usersTable.subscriptionPlan, "free"), eq(usersTable.isAdmin, false)));
   for (const user of expired) {
     const bots = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
     for (const bot of bots) await stopBotProcess(bot.id).catch(() => {});
@@ -336,8 +336,8 @@ async function restoreRunningBots() {
 
   for (const dep of runningDeps) {
     try {
-      const [owner] = await db.select({ subscriptionPlan: usersTable.subscriptionPlan, subscriptionExpiresAt: usersTable.subscriptionExpiresAt, isBanned: usersTable.isBanned }).from(usersTable).where(eq(usersTable.id, dep.userId));
-      if (!owner || owner.isBanned || !owner.subscriptionExpiresAt || owner.subscriptionExpiresAt <= new Date() || owner.subscriptionPlan === "free") {
+      const [owner] = await db.select({ subscriptionPlan: usersTable.subscriptionPlan, subscriptionExpiresAt: usersTable.subscriptionExpiresAt, isBanned: usersTable.isBanned, isAdmin: usersTable.isAdmin }).from(usersTable).where(eq(usersTable.id, dep.userId));
+      if (!owner || owner.isBanned || (!owner.isAdmin && (!owner.subscriptionExpiresAt || owner.subscriptionExpiresAt <= new Date() || owner.subscriptionPlan === "free"))) {
         await db.update(deploymentsTable).set({ status: "stopped", pid: null, updatedAt: new Date() }).where(eq(deploymentsTable.id, dep.id));
         continue;
       }

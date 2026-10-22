@@ -18,7 +18,9 @@ function serialize(row: any) {
 }
 async function activeUser(userId: number) {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
-  return user && isSubscriptionActive(user) ? { user, plan: getPlan(user.subscriptionPlan) } : null;
+  if (!user || user.isBanned || user.deletedAt) return null;
+  if (user.isAdmin) return { user, plan: { id: "admin", name: "Administrator", maxDeployments: 9999, priceKes: 0, features: ["Administrator access"] } };
+  return isSubscriptionActive(user) ? { user, plan: getPlan(user.subscriptionPlan) } : null;
 }
 
 router.get("/web-deployments", requireAny("read"), async (req, res): Promise<void> => {
@@ -81,7 +83,7 @@ router.post("/web-deployments/:id/stop", requireAny("write"), async (req, res): 
 router.post("/web-deployments/:id/domains", requireAny("payments"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const entitlement = await activeUser(user.id);
-  if (!entitlement || entitlement.plan.id !== "gold") { res.status(403).json({ error: "Custom domain requests are available on the Gold plan." }); return; }
+  if (!entitlement || (!entitlement.user.isAdmin && entitlement.plan.id !== "gold")) { res.status(403).json({ error: "Custom domain requests are available on the Gold plan." }); return; }
   const id = Number(req.params.id);
   const hostname = String(req.body?.hostname || "").trim().toLowerCase();
   if (!/^(?=.{4,255}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname)) { res.status(400).json({ error: "Enter a valid domain name" }); return; }
