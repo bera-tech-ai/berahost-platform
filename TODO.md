@@ -1,32 +1,32 @@
 # BERAHOST Subscription and Web Hosting TODO
 
-## Canonical monthly subscriptions replace coin access
+## ✅ Canonical monthly subscriptions replace coin access
 - Starter is KES 200/month with a maximum of 5 hosted bots or web deployments.
 - Silver is KES 500/month with a maximum of 13 hosted bots or web deployments.
 - Gold is KES 800/month with a maximum of 30 hosted bots or web deployments.
 - PayHero is the payment provider for plan purchases and paid custom-domain requests; coin purchases, coin deployment charges, daily coin claims, and voucher-based access are no longer part of the user deployment flow.
 - Successful payments extend the subscription for 30 days from the later of the current expiry or the callback time, and expose the resulting expiry to the user.
 
-## Bot lifecycle and environment configuration
+## ✅ Bot lifecycle and environment configuration
 - Existing bot deployment, session backup, auto-restart, and Socket.IO console behavior remains available.
 - Creating and starting a bot requires an active subscription and stays within the subscribed plan limit.
 - When a subscription expires or a user is banned, all running bots are stopped and their deployment records/session data remain stored for renewal or admin review.
 - Bot templates continue to scan `.env`, JSON, and JavaScript configuration values; deployment forms show required and optional variables without exposing server secrets.
-- Startup restore, crash restart, scheduled restart, and GitHub redeploy paths must refuse expired or banned users.
+- Startup restore, crash restart, scheduled restart, and GitHub redeploy paths refuse expired or banned users.
 
-## GitHub web deployment hosting
+## ✅ GitHub web deployment hosting
 - An authenticated user can submit a public GitHub repository URL, branch, optional build/start commands, and environment values.
 - The server validates the repository URL, scans env configuration, builds when a build script/command is present, serves static output when present, and runs Node web apps when a start command is present.
 - Every web deployment receives a unique hosted identity and URL, with status, logs, env scan, start/stop, and expiry state.
 - Web deployments use the same subscription limit as bot deployments, are stopped and taken offline when entitlement expires, and remain stored until renewal.
-- Users can request a custom domain for KES 134 through PayHero. Paid requests expose verification instructions/token and become routable only after verification.
+- Users can request a custom domain for KES 134 through PayHero. Paid requests require the requested TXT verification token and become routable only after DNS verification.
 
-## Admin controls
+## ✅ Admin controls
 - Admin can ban/unban users, delete users through an audited soft-delete flow, force a subscription plan and expiry, revoke/expire a subscription, stop deployments, and see web deployment/payment state.
 - Every administrative mutation is recorded in audit logs.
 
-## Verification and delivery
-- Update UI navigation, dashboard, subscription page, payment history, API-key documentation, and route manifest so coin purchasing is not presented as the access model.
-- Keep the existing bot deployment code paths functional while adding separate web runtime code.
-- Run schema push, TypeScript diagnostics, typecheck, production build, API health checks, subscription plan/status checks, and web deployment route checks before checkpointing.
-- Save and push a checkpoint only after the working tree is clean and the managed deployment configuration remains intact.
+## ✅ Verification and delivery
+- Updated UI navigation, dashboard, subscription page, payment history, API-key documentation, and route manifest so coin purchasing is not presented as the access model.
+- Kept the existing bot deployment code paths functional while adding separate web runtime code.
+- Completed schema push, TypeScript diagnostics, typecheck, production build, API health checks, canonical plan checks, and web deployment route checks.
+- Saved and pushed checkpoint `26815492d86b81b648efb096ccb4a76de930fb76`; managed auto-publication was submitted from the checkpoint.
