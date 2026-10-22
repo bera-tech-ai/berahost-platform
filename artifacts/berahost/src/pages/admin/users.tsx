@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Users, ArrowLeft, Ban, CheckCircle2, Coins, Shield, ShieldAlert,
   Search, MoreVertical, UserCheck, LogIn, KeyRound, Crown, AlertTriangle,
-  Star, Skull, Copy, ChevronDown
+  Star, Skull, Copy, ChevronDown, Trash2
 } from "lucide-react";
 import { 
   useAdminListUsers, useAdminBanUser, useAdminAdjustCoins, useGetMe
@@ -27,13 +27,13 @@ const BASE = import.meta.env.BASE_URL;
 const apiFetch = (path: string, opts?: RequestInit) =>
   fetch(`${BASE}api${path}`, { credentials: "include", ...opts });
 
-const PLANS = ["free", "starter", "pro", "business", "enterprise"];
+const PLANS = ["free", "starter", "silver", "gold"];
 const PLAN_COLORS: Record<string, string> = {
   free: "text-muted-foreground border-border/40",
   starter: "text-blue-400 border-blue-400/30",
   pro: "text-accent border-accent/30",
   business: "text-secondary border-secondary/30",
-  enterprise: "text-yellow-400 border-yellow-400/30",
+  gold: "text-yellow-400 border-yellow-400/30",
 };
 
 type ModalType = "coins" | "plan" | "reset-password" | "abuse-flag" | null;
@@ -71,6 +71,12 @@ export default function AdminUsers() {
     }
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiFetch(`/admin/users/${id}`, { method: "DELETE" }).then(r => r.json()),
+    onSuccess: (d) => { toast({ title: "User deleted", description: d.message }); refetch(); },
+    onError: (err: any) => toast({ title: "Delete failed", description: err.error || "Unable to delete user", variant: "destructive" }),
+  });
+
   const adjustCoinsMutation = useAdminAdjustCoins({
     mutation: {
       onSuccess: () => { toast({ title: "Coins Adjusted" }); closeModal(); refetch(); },
@@ -80,7 +86,7 @@ export default function AdminUsers() {
 
   const planMutation = useMutation({
     mutationFn: ({ id, plan, reason }: { id: number; plan: string; reason: string }) =>
-      apiFetch(`/admin/users/${id}/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan, reason }) }).then(r => r.json()),
+      apiFetch(`/admin/users/${id}/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan, reason, expiresAt: plan === "free" ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() }) }).then(r => r.json()),
     onSuccess: (d) => { toast({ title: "Plan Updated", description: d.message }); closeModal(); refetch(); },
     onError: () => toast({ title: "Error", description: "Plan override failed", variant: "destructive" }),
   });
@@ -268,6 +274,15 @@ export default function AdminUsers() {
                                 className={`cursor-pointer ${u.isBanned ? "text-accent focus:text-accent focus:bg-accent/10" : "text-destructive focus:text-destructive focus:bg-destructive/10"}`}
                               >
                                 {u.isBanned ? <><CheckCircle2 className="mr-2 h-3 w-3" /> Unban User</> : <><Ban className="mr-2 h-3 w-3" /> Ban User</>}
+                              </DropdownMenuItem>
+                            )}
+
+                            {!u.isAdmin && (
+                              <DropdownMenuItem
+                                onClick={() => { if (window.confirm(`Delete ${u.email}? Their hosting will be stopped and the account will be soft-deleted.`)) deleteMutation.mutate(u.id); }}
+                                className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
+                              >
+                                <Trash2 className="mr-2 h-3 w-3" /> Delete User
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
