@@ -437,7 +437,7 @@ export default function DeploymentConsole() {
       <Tabs defaultValue="terminal" className="w-full">
         <TabsList className="font-mono text-xs bg-background/50 border border-border/50">
           <TabsTrigger value="terminal" className="data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
-            <Terminal className="mr-1.5 h-3 w-3" /> Terminal
+            <FileText className="mr-1.5 h-3 w-3" /> Logs
           </TabsTrigger>
           <TabsTrigger value="metrics" className="data-[state=active]:bg-accent/10 data-[state=active]:text-accent">
             <Gauge className="mr-1.5 h-3 w-3" /> Metrics
@@ -456,7 +456,7 @@ export default function DeploymentConsole() {
             <div className="absolute top-0 inset-x-0 h-0.5 bg-gradient-to-r from-primary/50 via-secondary/50 to-primary/50" />
             <CardHeader className="py-2 px-4 border-b border-white/10 bg-white/5 flex flex-row items-center justify-between">
               <CardTitle className="font-mono text-xs flex items-center gap-2 text-primary/80">
-                <Terminal className="h-3 w-3" /> LIVE LOG STREAM
+                <Terminal className="h-3 w-3" /> LIVE DEPLOYMENT LOGS
                 {isRunning && <span className="h-1.5 w-1.5 bg-accent rounded-full animate-pulse" />}
               </CardTitle>
               <div className="flex gap-2">
