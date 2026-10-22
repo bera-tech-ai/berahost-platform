@@ -90,7 +90,7 @@ async function downloadGithubRepository(repoUrl: string, branch: string, root: s
 }
 
 function publicBaseUrl() {
-  return (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "")).replace(/\/$/, "");
+  return (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || "https://berahost-bfer3udn.manus.space").replace(/\/$/, "");
 }
 
 export function webUrl(slug: string) { return `${publicBaseUrl()}/web/${slug}`; }

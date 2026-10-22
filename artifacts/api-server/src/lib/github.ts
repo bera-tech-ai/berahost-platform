@@ -26,6 +26,8 @@ export type GithubRepository = {
   updatedAt: string | null;
 };
 
+const MANAGED_PUBLIC_URL = "https://berahost-bfer3udn.manus.space";
+
 function clientId() {
   return process.env.GITHUB_CLIENT_ID?.trim() || "";
 }
@@ -66,7 +68,7 @@ export function decryptGithubToken(value: string | null | undefined): string | n
 }
 
 export function publicBaseUrl(request?: { protocol: string; get(name: string): string | undefined }): string {
-  const configured = process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "");
+  const configured = process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL;
   if (configured) return configured.replace(/\/$/, "");
   if (request) return `${request.protocol}://${request.get("host") || "localhost"}`.replace(/\/$/, "");
   return "";

@@ -10,8 +10,9 @@ import { decryptGithubToken, ensureWebDeploymentWebhook, getGithubRepository, gi
 import { logger } from "../lib/logger";
 
 const router = Router();
+const MANAGED_PUBLIC_URL = "https://berahost-bfer3udn.manus.space";
 function publicUrl(slug: string) {
-  const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "")).replace(/\/$/, "");
+  const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;
 }
 function serialize(row: any) {
