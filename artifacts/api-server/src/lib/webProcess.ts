@@ -4,9 +4,11 @@ import { spawn, execFile } from "child_process";
 import { promisify } from "util";
 import net from "net";
 import crypto from "crypto";
-import { db, webDeploymentsTable, domainOrdersTable } from "@workspace/db";
+import { db, webDeploymentsTable, domainOrdersTable, usersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { logger } from "./logger";
+import { decryptGithubToken } from "./github";
+import { isSubscriptionActive } from "./subscriptions";
 
 const execFileAsync = promisify(execFile);
 const runningWebProcesses = new Map<number, ReturnType<typeof spawn>>();
@@ -72,13 +74,15 @@ async function waitForPort(port: number, child: ReturnType<typeof spawn>, timeou
   throw new Error(`Web process did not listen on port ${port} within ${timeoutMs / 1000}s.`);
 }
 
-async function downloadGithubRepository(repoUrl: string, branch: string, root: string): Promise<void> {
+async function downloadGithubRepository(repoUrl: string, branch: string, root: string, accessToken?: string | null): Promise<void> {
   const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
-  if (!match) throw new Error("Only public GitHub repositories are supported.");
+  if (!match) throw new Error("Only GitHub repository URLs are supported.");
   const owner = match[1];
   const repository = match[2];
-  const response = await fetch(`https://codeload.github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tar.gz/refs/heads/${encodeURIComponent(branch)}`);
-  if (!response.ok) throw new Error(`GitHub repository download failed (${response.status}). Check that the repository and branch are public and valid.`);
+  const headers: Record<string, string> = { "User-Agent": "BERAHOST-GitHub-Integration/1.0", Accept: "application/vnd.github+json" };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  const response = await fetch(`https://codeload.github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tar.gz/refs/heads/${encodeURIComponent(branch)}`, { headers });
+  if (!response.ok) throw new Error(`GitHub repository download failed (${response.status}). Check that the repository, branch, and GitHub access are valid.`);
   const archive = path.join(root, ".github-source.tar.gz");
   await fs.writeFile(archive, Buffer.from(await response.arrayBuffer()));
   await execFileAsync("tar", ["-xzf", archive, "-C", root, "--strip-components=1"], { timeout: 5 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
@@ -94,16 +98,23 @@ export function webUrl(slug: string) { return `${publicBaseUrl()}/web/${slug}`; 
 export async function startWebDeployment(id: number): Promise<void> {
   const [deployment] = await db.select().from(webDeploymentsTable).where(eq(webDeploymentsTable.id, id));
   if (!deployment) return;
+  const [owner] = await db.select().from(usersTable).where(eq(usersTable.id, deployment.userId));
+  if (!owner || owner.isBanned || owner.deletedAt || (!owner.isAdmin && !isSubscriptionActive(owner))) {
+    await db.update(webDeploymentsTable).set({ status: "stopped", pid: null, runtimePort: null, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+    return;
+  }
   const root = deploymentRoot(id);
   const envVars = (deployment.envVars as Record<string, string>) || {};
   const port = WEB_PORT_START + id;
   try {
     const repo = normalizeGithubUrl(deployment.repoUrl);
-    if (!repo) throw new Error("Only public GitHub repository URLs are supported.");
+    if (!repo) throw new Error("Only GitHub repository URLs are supported.");
+    const accessToken = decryptGithubToken(owner.githubAccessTokenEncrypted);
+    if (deployment.githubPrivate && !accessToken) throw new Error("Reconnect GitHub to access this private repository.");
     await db.update(webDeploymentsTable).set({ status: "building", updatedAt: new Date(), buildLog: "Cloning repository..." }).where(eq(webDeploymentsTable.id, id));
     await fs.rm(root, { recursive: true, force: true });
     await fs.mkdir(root, { recursive: true });
-    await downloadGithubRepository(repo, deployment.branch, root);
+    await downloadGithubRepository(repo, deployment.branch, root, accessToken);
     const scannedVars = await scanWebEnv(root);
     await db.update(webDeploymentsTable).set({ scannedVars, buildLog: "Repository cloned. Installing dependencies..." }).where(eq(webDeploymentsTable.id, id));
     const packagePath = path.join(root, "package.json");
@@ -161,6 +172,22 @@ export async function stopWebDeployment(id: number): Promise<void> {
   if (child?.pid) { try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} } }
   runningWebProcesses.delete(id);
   await db.update(webDeploymentsTable).set({ status: "stopped", pid: null, runtimePort: null, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+}
+
+const redeployingWeb = new Set<number>();
+
+export async function redeployWebDeployment(id: number, commitSha?: string, commitMessage?: string): Promise<void> {
+  if (redeployingWeb.has(id)) return;
+  redeployingWeb.add(id);
+  try {
+    const [deployment] = await db.select().from(webDeploymentsTable).where(eq(webDeploymentsTable.id, id));
+    if (!deployment || !deployment.autoDeploy) return;
+    await db.update(webDeploymentsTable).set({ lastCommitSha: commitSha || deployment.lastCommitSha, lastCommitMessage: commitMessage || deployment.lastCommitMessage, status: "queued", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+    await stopWebDeployment(id);
+    await startWebDeployment(id);
+  } finally {
+    redeployingWeb.delete(id);
+  }
 }
 
 export async function deleteWebDeployment(id: number): Promise<void> {

@@ -42,6 +42,9 @@ export function serializeUser(user: typeof usersTable.$inferSelect) {
     referralCode: user.referralCode,
     subscriptionPlan: user.subscriptionPlan,
     subscriptionExpiresAt: user.subscriptionExpiresAt?.toISOString() ?? null,
+    githubConnected: Boolean(user.githubId && user.githubAccessTokenEncrypted),
+    githubLogin: user.githubLogin ?? null,
+    githubAvatarUrl: user.githubAvatarUrl ?? null,
     createdAt: user.createdAt.toISOString(),
   };
 }

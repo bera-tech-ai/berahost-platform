@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useForm } from "react-hook-form";
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, MessageSquare, ArrowLeft, CheckCircle2, RotateCcw, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { Github, Loader2, MessageSquare, ArrowLeft, CheckCircle2, RotateCcw, Eye, EyeOff, ShieldCheck } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -50,6 +50,12 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
 
   const { refetch } = useGetMe({ query: { enabled: false, queryKey: getGetMeQueryKey() } });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("github") === "unconfigured") toast({ title: "GitHub sign-in unavailable", description: "The administrator has not finished configuring the GitHub OAuth App.", variant: "destructive" });
+    if (params.get("github") === "error") toast({ title: "GitHub sign-in failed", description: params.get("message") || "Please try again.", variant: "destructive" });
+  }, [toast]);
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -290,6 +296,11 @@ export default function Login() {
           </CardContent>
 
           <CardFooter className="flex flex-col space-y-4 text-center text-sm border-t border-border/50 pt-6">
+            {mode === "login" && <>
+              <div className="flex w-full items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-muted-foreground"><span className="h-px flex-1 bg-border/70" />or<span className="h-px flex-1 bg-border/70" /></div>
+              <Button type="button" variant="outline" className="w-full border-primary/30 bg-background/40" onClick={() => { window.location.href = `${BASE}api/auth/github?returnTo=/dashboard`; }}><Github className="mr-2 h-4 w-4" /> Continue with GitHub</Button>
+              <p className="text-[11px] text-muted-foreground">GitHub sign-in also lets you deploy repositories you authorize, including private repositories.</p>
+            </>}
             <div className="text-muted-foreground font-mono text-xs">
                Need an account?{" "}
               <Link href="/register" className="text-primary hover:text-primary/80 underline underline-offset-4 decoration-primary/30">

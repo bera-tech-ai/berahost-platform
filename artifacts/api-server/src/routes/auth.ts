@@ -1,5 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
+import crypto from "crypto";
 import { db, usersTable, coinTransactionsTable, auditLogsTable, platformSettingsTable, otpCodesTable } from "@workspace/db";
 import { eq, sql, and, gt } from "drizzle-orm";
 import { hashPassword, comparePassword, generateReferralCode, serializeUser } from "../lib/auth";
@@ -7,6 +8,7 @@ import { requireAuth } from "../middlewares/requireAuth";
 import { requireAdmin } from "../middlewares/requireAdmin";
 import { addCoins } from "../lib/coins";
 import { sendWhatsAppMessage, getWASenderStatus } from "../lib/waSender";
+import { encryptGithubToken, exchangeGithubCode, getGithubIdentity, githubCallbackUrl, githubConfigured, publicBaseUrl } from "../lib/github";
 
 const router = Router();
 
@@ -231,6 +233,59 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   req.session.userId = user.id;
 
   res.json({ user: serializeUser(user), message: "Login successful" });
+});
+
+router.get("/auth/github", (req, res): void => {
+  if (!githubConfigured()) {
+    res.redirect(`${publicBaseUrl(req as any)}/login?github=unconfigured`);
+    return;
+  }
+  const mode = String(req.query.mode || "") === "connect" && Boolean((req.session as any).userId) ? "connect" : "login";
+  const returnTo = String(req.query.returnTo || (mode === "connect" ? "/web-deployments" : "/dashboard"));
+  const safeReturnTo = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/dashboard";
+  const state = crypto.randomBytes(24).toString("hex");
+  (req.session as any).githubOAuth = { state, mode, userId: (req.session as any).userId || null, returnTo: safeReturnTo };
+  const params = new URLSearchParams({ client_id: process.env.GITHUB_CLIENT_ID || "", redirect_uri: githubCallbackUrl(req as any), scope: "repo read:user user:email", state });
+  res.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
+});
+
+router.get("/auth/github/callback", async (req, res): Promise<void> => {
+  const oauth = (req.session as any).githubOAuth;
+  delete (req.session as any).githubOAuth;
+  if (!oauth || !req.query.state || String(req.query.state) !== oauth.state) {
+    res.status(400).send("GitHub sign-in expired or was invalid. Please try again.");
+    return;
+  }
+  try {
+    const code = String(req.query.code || "");
+    if (!code) throw new Error("GitHub did not return an authorization code.");
+    const { accessToken } = await exchangeGithubCode(code, githubCallbackUrl(req as any));
+    const identity = await getGithubIdentity(accessToken);
+    const encryptedToken = encryptGithubToken(accessToken);
+    let user: typeof usersTable.$inferSelect | undefined;
+
+    if (oauth.mode === "connect" && oauth.userId) {
+      [user] = await db.select().from(usersTable).where(eq(usersTable.id, Number(oauth.userId)));
+      const [owned] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.githubId, String(identity.id)));
+      if (owned && owned.id !== user?.id) throw new Error("This GitHub account is already connected to another BERAHOST account.");
+      if (!user) throw new Error("Your BERAHOST session expired. Sign in again.");
+    } else {
+      [user] = await db.select().from(usersTable).where(eq(usersTable.githubId, String(identity.id)));
+      if (!user && identity.email) [user] = await db.select().from(usersTable).where(eq(usersTable.email, identity.email.toLowerCase()));
+      if (!user) {
+        user = (await db.insert(usersTable).values({ email: (identity.email || `github-${identity.id}@users.noreply.github.com`).toLowerCase(), passwordHash: await hashPassword(crypto.randomBytes(32).toString("hex")), displayName: identity.name || identity.login, avatarUrl: identity.avatarUrl, githubId: String(identity.id), githubLogin: identity.login, githubAvatarUrl: identity.avatarUrl, githubAccessTokenEncrypted: encryptedToken, isVerified: true, subscriptionPlan: "free", coins: 0, referralCode: generateReferralCode() }).returning())[0];
+      }
+    }
+
+    if (!user) throw new Error("Could not create or find your BERAHOST account.");
+    [user] = await db.update(usersTable).set({ githubId: String(identity.id), githubLogin: identity.login, githubAvatarUrl: identity.avatarUrl, githubAccessTokenEncrypted: encryptedToken, isVerified: true, ...(user.displayName ? {} : { displayName: identity.name || identity.login }), ...(user.avatarUrl ? {} : { avatarUrl: identity.avatarUrl }) }).where(eq(usersTable.id, user.id)).returning();
+    (req.session as any).userId = user.id;
+    const separator = oauth.returnTo.includes("?") ? "&" : "?";
+    res.redirect(`${publicBaseUrl(req as any)}${oauth.returnTo}${separator}github=connected`);
+  } catch (error: any) {
+    const message = encodeURIComponent(error?.message || "GitHub sign-in failed");
+    res.redirect(`${publicBaseUrl(req as any)}/login?github=error&message=${message}`);
+  }
 });
 
 router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {

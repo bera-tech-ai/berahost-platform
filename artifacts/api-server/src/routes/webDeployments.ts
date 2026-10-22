@@ -6,6 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { requireAny } from "../middlewares/requireAuth";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 import { deleteWebDeployment, generateSlug, normalizeGithubUrl, startWebDeployment, stopWebDeployment } from "../lib/webProcess";
+import { decryptGithubToken, ensureWebDeploymentWebhook, getGithubRepository, githubRepoUrl, managedGithubWebhookUrl, removeWebDeploymentWebhook } from "../lib/github";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -47,17 +48,65 @@ router.post("/web-deployments", requireAny("write"), async (req, res): Promise<v
   const user = (req as any).user;
   const entitlement = await activeUser(user.id);
   if (!entitlement) { res.status(402).json({ error: "An active monthly subscription is required before deploying a web application." }); return; }
-  const repoUrl = normalizeGithubUrl(req.body?.repoUrl);
-  if (!repoUrl) { res.status(400).json({ error: "Only public GitHub repository URLs are supported." }); return; }
-  const branch = String(req.body?.branch || "main").trim();
+  const selectedRepo = req.body?.githubRepo && typeof req.body.githubRepo === "object" ? req.body.githubRepo : null;
+  let repoUrl = normalizeGithubUrl(req.body?.repoUrl);
+  let githubRepoId: number | null = null;
+  let githubFullName: string | null = null;
+  let githubPrivate = false;
+  let defaultBranch = "main";
+  if (selectedRepo?.fullName) {
+    const token = decryptGithubToken(entitlement.user.githubAccessTokenEncrypted);
+    if (!token) { res.status(409).json({ error: "Connect GitHub before deploying a selected repository." }); return; }
+    try {
+      const verified = await getGithubRepository(token, String(selectedRepo.fullName));
+      repoUrl = githubRepoUrl(verified.fullName);
+      githubRepoId = verified.id;
+      githubFullName = verified.fullName;
+      githubPrivate = verified.private;
+      defaultBranch = verified.defaultBranch;
+    } catch (error: any) {
+      res.status(403).json({ error: error?.message || "You do not have access to this GitHub repository." });
+      return;
+    }
+  }
+  if (!repoUrl) { res.status(400).json({ error: "Choose a connected GitHub repository or enter a public GitHub repository URL." }); return; }
+  const branch = String(req.body?.branch || defaultBranch).trim();
   if (!/^[A-Za-z0-9._/-]{1,120}$/.test(branch) || branch.includes("..")) { res.status(400).json({ error: "Invalid branch name" }); return; }
   const existing = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id));
   const botRows = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
   if (existing.length + botRows.length >= entitlement.plan.maxDeployments) { res.status(403).json({ error: `${entitlement.plan.name} supports up to ${entitlement.plan.maxDeployments} hosted deployments.`, limit: entitlement.plan.maxDeployments }); return; }
   const envVars = typeof req.body?.envVars === "object" && req.body.envVars ? req.body.envVars : {};
-  const [row] = await db.insert(webDeploymentsTable).values({ userId: user.id, repoUrl, branch, customName: typeof req.body?.customName === "string" ? req.body.customName.trim().slice(0, 100) || null : null, slug: generateSlug(), buildCommand: typeof req.body?.buildCommand === "string" ? req.body.buildCommand.trim() || null : null, startCommand: typeof req.body?.startCommand === "string" ? req.body.startCommand.trim() || null : null, envVars, expiresAt: user.subscriptionExpiresAt, status: "queued" }).returning();
+  const autoDeploy = Boolean(selectedRepo) && req.body?.autoDeploy !== false;
+  const [row] = await db.insert(webDeploymentsTable).values({ userId: user.id, repoUrl, githubRepoId, githubFullName, githubPrivate, branch, customName: typeof req.body?.customName === "string" ? req.body.customName.trim().slice(0, 100) || null : null, slug: generateSlug(), buildCommand: typeof req.body?.buildCommand === "string" ? req.body.buildCommand.trim() || null : null, startCommand: typeof req.body?.startCommand === "string" ? req.body.startCommand.trim() || null : null, envVars, expiresAt: user.subscriptionExpiresAt, status: "queued", autoDeploy }).returning();
+  let automationWarning: string | undefined;
+  if (autoDeploy) {
+    try { await ensureWebDeploymentWebhook(row.id, managedGithubWebhookUrl(req as any)); }
+    catch (error: any) {
+      automationWarning = error?.message || "Automatic deployment could not be enabled.";
+      await db.update(webDeploymentsTable).set({ autoDeploy: false, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, row.id));
+      row.autoDeploy = false;
+    }
+  }
   startWebDeployment(row.id).catch((err) => logger.error({ err, webDeploymentId: row.id }, "Web deployment start failed"));
-  res.status(201).json(serialize(row));
+  res.status(201).json({ ...serialize(row), automationWarning });
+});
+
+router.patch("/web-deployments/:id", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const [row] = await db.select().from(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
+  if (!row) { res.status(404).json({ error: "Web deployment not found" }); return; }
+  const nextAutoDeploy = req.body?.autoDeploy === undefined ? row.autoDeploy : Boolean(req.body.autoDeploy);
+  const nextBranch = req.body?.branch === undefined ? row.branch : String(req.body.branch).trim();
+  if (!/^[A-Za-z0-9._/-]{1,120}$/.test(nextBranch) || nextBranch.includes("..")) { res.status(400).json({ error: "Invalid branch name" }); return; }
+  if (row.autoDeploy && (!nextAutoDeploy || nextBranch !== row.branch)) await removeWebDeploymentWebhook(id).catch(() => {});
+  const [updated] = await db.update(webDeploymentsTable).set({ branch: nextBranch, autoDeploy: nextAutoDeploy, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id)).returning();
+  let automationWarning: string | undefined;
+  if (nextAutoDeploy) {
+    try { await ensureWebDeploymentWebhook(id, managedGithubWebhookUrl(req as any)); }
+    catch (error: any) { automationWarning = error?.message || "Automatic deployment could not be enabled."; await db.update(webDeploymentsTable).set({ autoDeploy: false }).where(eq(webDeploymentsTable.id, id)); updated.autoDeploy = false; }
+  }
+  res.json({ ...serialize(updated), automationWarning });
 });
 
 router.post("/web-deployments/:id/start", requireAny("write"), async (req, res): Promise<void> => {
@@ -87,6 +136,7 @@ router.delete("/web-deployments/:id", requireAny("write"), async (req, res): Pro
   if (!row) { res.status(404).json({ error: "Web deployment not found" }); return; }
 
   await deleteWebDeployment(id);
+  await removeWebDeploymentWebhook(id).catch(() => {});
   await db.delete(domainOrdersTable).where(and(eq(domainOrdersTable.webDeploymentId, id), eq(domainOrdersTable.userId, user.id)));
   await db.delete(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
   res.json({ message: "Web deployment deleted" });

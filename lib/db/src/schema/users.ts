@@ -20,6 +20,10 @@ export const usersTable = pgTable("users", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   subscriptionPlan: varchar("subscription_plan", { length: 50 }).default("free").notNull(),
   subscriptionExpiresAt: timestamp("subscription_expires_at", { withTimezone: true }),
+  githubId: varchar("github_id", { length: 100 }).unique(),
+  githubLogin: varchar("github_login", { length: 100 }),
+  githubAvatarUrl: text("github_avatar_url"),
+  githubAccessTokenEncrypted: text("github_access_token_encrypted"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

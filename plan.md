@@ -42,3 +42,39 @@ Replace coin-based access with monthly Starter, Silver, and Gold subscriptions f
 - `artifacts/berahost/src/pages/subscriptions.tsx`: canonical plan purchase/status UI.
 - `artifacts/berahost/src/pages/web-deployments.tsx`: GitHub web deployment workflow and hosted URLs.
 - `artifacts/berahost/public/manus-routes.json`: synchronized route manifest.
+
+## GitHub-connected deployment extension
+
+Add GitHub OAuth for signed-in users and a GitHub sign-in path that uses the same callback. OAuth access tokens are encrypted at rest with a server-side key. The integration stores the GitHub account identity on the BERAHOST user and exposes repository metadata through GitHub's API, including private repositories permitted by the OAuth `repo` scope.
+
+Web deployments will accept a selected GitHub repository and branch instead of requiring a pasted public URL. The deployment record stores the repository identity, whether it is private, and whether automatic deployment is enabled. Repository downloads use the user's encrypted GitHub token when needed; public URL deployments remain backward compatible.
+
+When a connected deployment is created with automatic deployment enabled, BERAHOST creates a GitHub push webhook for the selected repository using a per-deployment signing secret. The webhook validates GitHub's HMAC signature, filters to the selected branch, records commit metadata, and queues a safe redeploy. Deleting a deployment removes its GitHub webhook and temporary build files. Existing manually configured bot webhooks remain supported.
+
+### GitHub-connected product behavior
+
+- Users can connect GitHub from BERAHOST and see the connected GitHub account.
+- Users can sign in with GitHub; existing accounts are matched by verified GitHub identity or email, and new accounts are created with a generated password hash.
+- Repository selection shows repositories the connected GitHub account can access, including private repositories allowed by the OAuth grant.
+- A selected repository can be deployed without pasting its URL.
+- Auto deploy is enabled by default for connected web deployments and redeploys on pushes to the selected branch.
+- Users can disable auto deploy, change the branch, disconnect GitHub, and delete deployments.
+- Existing public URL deployments and existing manual webhook records continue to work.
+
+### GitHub-connected design direction
+
+Use a **Git-native control room**: repository identity is primary, branch and commit state are visible, automation is explicit, and the existing dark BERAHOST command-center styling is preserved. Cyan marks connected actions, green marks healthy automation, amber marks permissions or pending hooks, and red is reserved for destructive or failed states. Use concise headings such as “Connect your source once.” and “Every push, shipped safely.”
+
+### GitHub-connected project structure
+
+- `lib/db/src/schema/users.ts`: GitHub identity and encrypted token fields.
+- `lib/db/src/schema/web_deployments.ts`: repository identity, auto-deploy state, and commit metadata.
+- `artifacts/api-server/src/lib/github.ts`: OAuth, GitHub API, token encryption, repository listing, and webhook helpers.
+- `artifacts/api-server/src/routes/auth.ts`: GitHub sign-in and callback.
+- `artifacts/api-server/src/routes/github.ts`: connect/disconnect, repository listing, and managed webhook operations.
+- `artifacts/api-server/src/routes/webDeployments.ts`: selected-repository deployment creation and deletion cleanup.
+- `artifacts/api-server/src/lib/webProcess.ts`: authenticated repository download and redeploy startup.
+- `artifacts/berahost/src/pages/github-integration.tsx`: connection state, repository picker, and automation settings.
+- `artifacts/berahost/src/pages/web-deployments.tsx`: connected-repository deployment flow and auto-deploy controls.
+
+GitHub OAuth requires an OAuth App callback URL of `https://berahost-bfer3udn.manus.space/api/auth/github/callback` and secrets `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_TOKEN_ENCRYPTION_KEY`. Use the GitHub `repo` scope for private repository contents and webhook management. Webhook endpoints remain unauthenticated but HMAC-protected; tokens are never returned to browsers or logs.

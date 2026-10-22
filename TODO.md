@@ -30,3 +30,12 @@
 - Kept the existing bot deployment code paths functional while adding separate web runtime code.
 - Completed schema push, TypeScript diagnostics, typecheck, production build, API health checks, canonical plan checks, and web deployment route checks.
 - Saved and pushed checkpoint `26815492d86b81b648efb096ccb4a76de930fb76`; managed auto-publication was submitted from the checkpoint.
+
+## ⏳ GitHub OAuth and connected repository deployment
+- A user can connect GitHub from BERAHOST using OAuth and see the connected GitHub account; the OAuth grant permits access to private repositories.
+- A user can sign in with GitHub; an existing BERAHOST account is matched by GitHub identity or verified email, and a new account can be created safely.
+- The connected account can list accessible repositories and branches, select a private or public repository, and deploy it without pasting a repository URL.
+- Connected web deployments store repository identity, branch, private/public state, and encrypted access credentials without returning tokens to the browser or logs.
+- Auto deploy is enabled by default for connected web deployments, creates a signed GitHub push webhook, filters to the selected branch, records commit metadata, and redeploys the latest revision after each matching commit.
+- Users can disable auto deploy, reconnect/disconnect GitHub, and delete a deployment; deletion removes its managed webhook, runtime, temporary build files, and dependent domain orders.
+- Existing pasted public URL deployments and existing manually configured bot webhooks remain functional.
