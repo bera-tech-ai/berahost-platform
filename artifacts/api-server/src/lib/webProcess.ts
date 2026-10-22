@@ -57,9 +57,22 @@ async function run(command: string, cwd: string, env: Record<string, string>, ti
   return `${result.stdout || ""}${result.stderr || ""}`.slice(-120000);
 }
 
+async function appendBuildLog(id: number, message: string): Promise<string> {
+  const [current] = await db.select({ buildLog: webDeploymentsTable.buildLog }).from(webDeploymentsTable).where(eq(webDeploymentsTable.id, id));
+  const next = `${current?.buildLog ? `${current.buildLog}\n` : ""}${message}`.slice(-120000);
+  await db.update(webDeploymentsTable).set({ buildLog: next, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+  return next;
+}
+
 function detectBuildCommand(pkg: any): string {
   if (pkg?.scripts?.build) return "npm run build";
   if (pkg?.scripts?.compile) return "npm run compile";
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  if (deps.next) return "npx next build";
+  if (deps.vite) return "npx vite build";
+  if (deps["react-scripts"]) return "npx react-scripts build";
+  if (deps.astro) return "npx astro build";
+  if (deps.parcel) return "npx parcel build";
   return "";
 }
 
@@ -67,8 +80,20 @@ function detectStartCommand(pkg: any, hasStaticOutput: boolean): string {
   if (hasStaticOutput) return "";
   if (pkg?.scripts?.start) return "npm start";
   for (const name of ["serve", "app", "run", "launch", "begin", "dev"]) if (pkg?.scripts?.[name]) return `npm run ${name}`;
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  if (deps.next) return "npx next start -H 0.0.0.0";
+  if (deps.vite) return "npx vite preview --host 0.0.0.0";
   if (pkg?.main) return `node ${pkg.main}`;
   return "";
+}
+
+async function findPackageRoot(root: string): Promise<{ root: string; pkg: any }> {
+  const candidates = [root, "frontend", "client", "app", "website", "web"];
+  for (const relative of candidates) {
+    const candidate = path.join(root, relative);
+    try { return { root: candidate, pkg: JSON.parse(await fs.readFile(path.join(candidate, "package.json"), "utf8")) }; } catch { /* try next candidate */ }
+  }
+  return { root, pkg: {} };
 }
 
 async function waitForPort(port: number, child: ReturnType<typeof spawn>, timeoutMs = 30_000): Promise<void> {
@@ -125,37 +150,42 @@ export async function startWebDeployment(id: number): Promise<void> {
     if (!repo) throw new Error("Only GitHub repository URLs are supported.");
     const accessToken = decryptGithubToken(owner.githubAccessTokenEncrypted);
     if (deployment.githubPrivate && !accessToken) throw new Error("Reconnect GitHub to access this private repository.");
-    await db.update(webDeploymentsTable).set({ status: "building", updatedAt: new Date(), buildLog: "Cloning repository..." }).where(eq(webDeploymentsTable.id, id));
+    await db.update(webDeploymentsTable).set({ status: "building", updatedAt: new Date(), buildLog: "[BERAHOST] Cloning repository..." }).where(eq(webDeploymentsTable.id, id));
     await fs.rm(root, { recursive: true, force: true });
     await fs.mkdir(root, { recursive: true });
     await downloadGithubRepository(repo, deployment.branch, root, accessToken);
     const scannedVars = await scanWebEnv(root);
-    await db.update(webDeploymentsTable).set({ scannedVars, buildLog: "Repository cloned. Installing dependencies..." }).where(eq(webDeploymentsTable.id, id));
-    const packagePath = path.join(root, "package.json");
-    let pkg: any = {};
-    try { pkg = JSON.parse(await fs.readFile(packagePath, "utf8")); } catch { /* static repository */ }
-    const installCommand = await fs.access(path.join(root, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(root, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --no-audit --no-fund"));
-    if (pkg.scripts) {
-      const installLog = await run(installCommand, root, envVars);
-      await db.update(webDeploymentsTable).set({ buildLog: `Dependencies installed.\n${installLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+    await appendBuildLog(id, "[BERAHOST] Repository cloned. Installing dependencies...");
+    await db.update(webDeploymentsTable).set({ scannedVars }).where(eq(webDeploymentsTable.id, id));
+    const project = await findPackageRoot(root);
+    const packageRoot = project.root;
+    const pkg = project.pkg;
+    const installCommand = await fs.access(path.join(packageRoot, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(packageRoot, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --no-audit --no-fund"));
+    if (Object.keys(pkg).length > 0) {
+      const installLog = await run(installCommand, packageRoot, envVars);
+      await appendBuildLog(id, `[BERAHOST] Dependencies installed.\n${installLog}`);
     }
     const buildCommand = deployment.buildCommand || detectBuildCommand(pkg);
     if (buildCommand) {
-      const buildLog = await run(buildCommand, root, { ...envVars, PORT: String(port) });
-      await db.update(webDeploymentsTable).set({ buildLog: `Build completed.\n${buildLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+      await appendBuildLog(id, `[BERAHOST] Build command detected: ${buildCommand}`);
+      const buildLog = await run(buildCommand, packageRoot, { ...envVars, PORT: String(port) });
+      await appendBuildLog(id, `[BERAHOST] Build completed.\n${buildLog}`);
     }
-    const candidates = ["dist", "build", "out", "public"].map((dir) => path.join(root, dir));
+    const candidates = ["dist", "build", "out", "public"].map((dir) => path.join(packageRoot, dir));
     let staticRoot = (await Promise.all(candidates.map(async (candidate) => (await fs.stat(candidate).catch(() => null))?.isDirectory() ? candidate : null))).find(Boolean) as string | undefined;
-    if (!staticRoot && !pkg.scripts && (await fs.stat(path.join(root, "index.html")).catch(() => null))?.isFile()) staticRoot = root;
+    if (!staticRoot && (await fs.stat(path.join(packageRoot, "index.html")).catch(() => null))?.isFile()) staticRoot = packageRoot;
     const startCommand = deployment.startCommand || detectStartCommand(pkg, Boolean(staticRoot));
+    if (buildCommand || startCommand) await appendBuildLog(id, `[BERAHOST] ${buildCommand ? `Build: ${buildCommand}` : "No build script"}; ${startCommand ? `Start: ${startCommand}` : "static output detected"}`);
     if (staticRoot && !startCommand) {
-      await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot) || ".", runtimePort: null, pid: null, buildLog: "Static site built and ready.", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+      await appendBuildLog(id, "[BERAHOST] Static site built and ready.");
+      await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot) || ".", runtimePort: null, pid: null }).where(eq(webDeploymentsTable.id, id));
       return;
     }
     if (!startCommand) throw new Error("No build output or start command was found. Add a build/start command or a package.json script.");
-    const child = spawn("bash", ["-lc", startCommand], { cwd: root, env: { ...process.env, ...envVars, PORT: String(port), NODE_ENV: "production" }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("bash", ["-lc", startCommand], { cwd: packageRoot, env: { ...process.env, ...envVars, PORT: String(port), NODE_ENV: "production" }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     runningWebProcesses.set(id, child);
-    let log = "Node web process started.\n";
+    let log = (await db.select({ buildLog: webDeploymentsTable.buildLog }).from(webDeploymentsTable).where(eq(webDeploymentsTable.id, id)))[0]?.buildLog || "";
+    log = `${log}\n[BERAHOST] Node web process started.\n`.slice(-120000);
     let logFlush: NodeJS.Timeout | undefined;
     const append = (chunk: Buffer) => {
       log = `${log}${chunk.toString()}`.slice(-120000);
@@ -177,7 +207,8 @@ export async function startWebDeployment(id: number): Promise<void> {
     child.unref();
   } catch (err: any) {
     logger.error({ err, webDeploymentId: id }, "Web deployment failed");
-    await db.update(webDeploymentsTable).set({ status: "failed", buildLog: String(err?.stderr || err?.message || err), updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id)).catch(() => {});
+    await appendBuildLog(id, `[BERAHOST] ERROR: ${String(err?.stderr || err?.message || err)}`).catch(() => {});
+    await db.update(webDeploymentsTable).set({ status: "failed" }).where(eq(webDeploymentsTable.id, id)).catch(() => {});
   }
 }
 

@@ -65,7 +65,7 @@ export default function WebDeploymentsPage() {
   const [domainOrders, setDomainOrders] = useState<Record<number, any>>({});
   const [openLogs, setOpenLogs] = useState<Record<number, boolean>>({});
 
-  const load = () => apiFetch("/api/web-deployments").then(setRows).catch(() => setRows([]));
+  const load = () => apiFetch("/api/web-deployments").then(setRows).catch(() => { /* Keep the last successful snapshot during transient polling failures. */ });
   const loadGithub = async () => {
     try {
       const status = await apiFetch("/api/github/status");
