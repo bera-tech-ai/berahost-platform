@@ -347,6 +347,10 @@ const restartResetTimers = new Map<number, NodeJS.Timeout>();
 // queued restart and the bot comes back up immediately after being stopped.
 const pendingRestartTimers = new Map<number, NodeJS.Timeout>();
 
+// Stop requests that arrive while a deployment is still cloning/installing,
+// before its child process has been registered in runningProcesses.
+const stopRequested = new Set<number>();
+
 // Per-deployment watchdog — DISABLED.
 // Bots are only restarted when they actually crash (non-zero exit code).
 // Killing for silence / idle / no-output during startup breaks pairing-code
@@ -574,6 +578,7 @@ export async function startBotProcess(
 
   // Clear intentional-stop flag so this fresh start is tracked
   intentionallyStopped.delete(deploymentId);
+  stopRequested.delete(deploymentId);
 
   // Update status to deploying
   await db
@@ -1155,6 +1160,17 @@ for (const candidate of candidates) {
       `if [ -f "./wolf.js" ]; then node /tmp/.bh_wolf_patch.cjs 2>/dev/null || true; fi`,
     ].join("\n");
 
+    // A stop can arrive while clone/install/patch steps are still running.
+    // Do not spawn the bot after that request.
+    if (stopRequested.has(deploymentId)) {
+      stopRequested.delete(deploymentId);
+      startingDeployments.delete(deploymentId);
+      releasePort(deploymentId);
+      await db.update(deploymentsTable).set({ status: "stopped", pid: null, updatedAt: new Date() }).where(eq(deploymentsTable.id, deploymentId));
+      await emitLog(deploymentId, `[BERAHOST] Start cancelled because the bot was stopped.`, "info").catch(() => {});
+      return { pid: -1 };
+    }
+
     const botProcess = spawn("bash", ["-c", [
       nmCacheSetup,
       // Patch preload.js for Node.js 24 BEFORE npm install so a fresh cache
@@ -1643,6 +1659,13 @@ for (const candidate of candidates) {
       .where(eq(deploymentsTable.id, deploymentId));
 
     await emitLog(deploymentId, `[BERAHOST] Bot started with PID ${botProcess.pid}`, "info");
+
+    // Close the narrow race between the pre-spawn check and process registration.
+    if (stopRequested.has(deploymentId)) {
+      await stopBotProcess(deploymentId);
+      return { pid: -1 };
+    }
+
     return { pid: botProcess.pid };
   } catch (err) {
     // Always release the double-deploy guard so a retry is possible
@@ -1661,6 +1684,7 @@ for (const candidate of candidates) {
 
 export async function stopBotProcess(deploymentId: number): Promise<void> {
   const proc = runningProcesses.get(deploymentId);
+  stopRequested.add(deploymentId);
 
   // Cancel watchdog immediately — we're stopping intentionally
   clearWatchdog(deploymentId);
@@ -1677,8 +1701,14 @@ export async function stopBotProcess(deploymentId: number): Promise<void> {
   // Mark as intentionally stopped BEFORE killing so the exit handler knows
   intentionallyStopped.add(deploymentId);
 
-  if (proc && proc.pid) {
-    const pgid = proc.pid;
+  let persistedPid: number | null = null;
+  if (!proc?.pid) {
+    const [row] = await db.select({ pid: deploymentsTable.pid }).from(deploymentsTable).where(eq(deploymentsTable.id, deploymentId));
+    persistedPid = row?.pid ?? null;
+  }
+
+  const pgid = proc?.pid ?? persistedPid;
+  if (pgid) {
     try {
       // Kill the entire process group (bash + npm + node grandchildren).
       // Negative PID targets the process group rather than just the bash PID.
@@ -1691,7 +1721,7 @@ export async function stopBotProcess(deploymentId: number): Promise<void> {
         try { process.kill(-pgid, "SIGKILL"); } catch { /* already dead */ }
         resolve();
       }, 2000);
-      proc.once("exit", () => { clearTimeout(timer); resolve(); });
+      if (proc) proc.once("exit", () => { clearTimeout(timer); resolve(); });
     });
 
     runningProcesses.delete(deploymentId);
