@@ -10,6 +10,11 @@ import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 
 const router = Router();
 
+const ADMIN_PLAN = { id: "admin", name: "Administrator", maxDeployments: 9999, priceKes: 0, features: ["Administrator access"] } as const;
+function deploymentPlan(user: { isAdmin?: boolean; subscriptionPlan?: string | null }) {
+  return user.isAdmin ? ADMIN_PLAN : getPlan(user.subscriptionPlan);
+}
+
 function serializeDeployment(dep: any, bot: any) {
   return {
     id: dep.id,
@@ -74,7 +79,7 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
     res.status(402).json({ error: "An active monthly subscription is required before deploying a bot." });
     return;
   }
-  const plan = getPlan(dbUser.subscriptionPlan);
+  const plan = deploymentPlan(dbUser);
   const existingDeployments = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
   if (existingDeployments.length >= plan.maxDeployments) {
     res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.`, limit: plan.maxDeployments });
@@ -164,7 +169,7 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
     res.status(402).json({ error: "Your subscription is inactive. Renew before starting this bot." });
     return;
   }
-  const plan = getPlan(dbUser.subscriptionPlan);
+  const plan = deploymentPlan(dbUser);
   const limit = plan.maxDeployments;
 
   const [{ runningCount }] = await db
@@ -323,7 +328,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
     return;
   }
-  const plan = getPlan(dbUser.subscriptionPlan);
+  const plan = deploymentPlan(dbUser);
   const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
   if (hostedCount.length >= plan.maxDeployments) {
     res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
@@ -488,7 +493,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
     return;
   }
-  const plan = getPlan(dbUser.subscriptionPlan);
+  const plan = deploymentPlan(dbUser);
   const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
   if (hostedCount.length >= plan.maxDeployments) {
     res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
