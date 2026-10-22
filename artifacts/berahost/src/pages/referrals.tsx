@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Gift, Copy, Users, Coins, ChevronRight, Send } from "lucide-react";
+import { Gift, Copy, Users, ChevronRight, Send } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -47,7 +47,7 @@ export default function ReferralsPage() {
     <div className="space-y-6 max-w-2xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight font-mono">REFERRAL PROGRAM</h1>
-        <p className="text-muted-foreground text-sm">Invite friends — earn coins for every signup</p>
+        <p className="text-muted-foreground text-sm">Invite friends and grow the BERAHOST community</p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -55,8 +55,8 @@ export default function ReferralsPage() {
           <CardContent className="pt-4 pb-3 flex items-center gap-3">
             <Gift className="w-8 h-8 text-cyan-400" />
             <div>
-              <p className="text-xs text-muted-foreground">You earn per referral</p>
-              <p className="text-2xl font-bold font-mono text-cyan-400">{data?.referrerReward ?? 20} <span className="text-sm">coins</span></p>
+              <p className="text-xs text-muted-foreground">Your referral benefit</p>
+              <p className="text-2xl font-bold font-mono text-cyan-400">Subscription credit</p>
             </div>
           </CardContent>
         </Card>
@@ -65,7 +65,7 @@ export default function ReferralsPage() {
             <Users className="w-8 h-8 text-emerald-400" />
             <div>
               <p className="text-xs text-muted-foreground">Friend gets on signup</p>
-              <p className="text-2xl font-bold font-mono text-emerald-400">{data?.referredReward ?? 10} <span className="text-sm">coins</span></p>
+              <p className="text-2xl font-bold font-mono text-emerald-400">Plan guidance</p>
             </div>
           </CardContent>
         </Card>
@@ -77,7 +77,7 @@ export default function ReferralsPage() {
         <Card className="border-white/10 bg-black/40">
           <CardHeader>
             <CardTitle className="font-mono text-base">Your Referral Link</CardTitle>
-            <CardDescription>Share this link — you earn {data?.referrerReward} coins per signup, they get {data?.referredReward} free coins</CardDescription>
+            <CardDescription>Share this link and invite friends to choose a monthly hosting plan.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -101,12 +101,12 @@ export default function ReferralsPage() {
                 <p className="text-xs text-muted-foreground">Total Referrals</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold font-mono text-cyan-400">{data?.totalCoinsEarned ?? 0}</p>
-                <p className="text-xs text-muted-foreground">Coins Earned</p>
+                <p className="text-2xl font-bold font-mono text-cyan-400">{data?.totalReferrals ?? 0}</p>
+                <p className="text-xs text-muted-foreground">Plan Referrals</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold font-mono text-yellow-400">{(data?.totalReferrals ?? 0) * (data?.referrerReward ?? 20)}</p>
-                <p className="text-xs text-muted-foreground">Lifetime Value</p>
+                <p className="text-2xl font-bold font-mono text-yellow-400">Active</p>
+                <p className="text-xs text-muted-foreground">Referral status</p>
               </div>
             </div>
           </CardContent>
@@ -116,7 +116,7 @@ export default function ReferralsPage() {
       <Card className="border-white/10 bg-black/40">
         <CardHeader>
           <CardTitle className="font-mono text-base">Have a Referral Code?</CardTitle>
-          <CardDescription>Enter a friend's code to get {data?.referredReward ?? 10} bonus coins added to your wallet</CardDescription>
+          <CardDescription>Enter a friend's code to connect your account to the referral program.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex gap-2">
@@ -144,7 +144,7 @@ export default function ReferralsPage() {
                     <span className="text-sm font-mono">{r.email}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30 text-xs">+{r.coinsAwarded} coins</Badge>
+                    <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30 text-xs">Referred</Badge>
                     <span className="text-xs text-muted-foreground">{format(new Date(r.createdAt), "MMM d")}</span>
                   </div>
                 </div>

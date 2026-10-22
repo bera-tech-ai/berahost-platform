@@ -152,7 +152,7 @@ export default function AdminUsers() {
             <Users className="h-6 w-6 text-primary" /> USER MANAGEMENT
           </h1>
           <p className="text-xs text-muted-foreground font-mono mt-0.5">
-            Full control — ban, verify, impersonate, override plans, adjust coins, reset passwords
+            Full control — ban, verify, impersonate, override plans, delete users, reset passwords
           </p>
         </div>
       </div>
@@ -182,7 +182,7 @@ export default function AdminUsers() {
                   <TableRow className="border-border/50 hover:bg-transparent">
                     <TableHead className="font-mono text-xs font-bold uppercase">User</TableHead>
                     <TableHead className="font-mono text-xs font-bold uppercase">Plan</TableHead>
-                    <TableHead className="font-mono text-xs font-bold uppercase">Coins</TableHead>
+                    <TableHead className="font-mono text-xs font-bold uppercase">Expires</TableHead>
                     <TableHead className="font-mono text-xs font-bold uppercase">Status</TableHead>
                     <TableHead className="font-mono text-xs font-bold uppercase">Joined</TableHead>
                     <TableHead className="font-mono text-xs font-bold uppercase text-right">Actions</TableHead>
@@ -206,11 +206,7 @@ export default function AdminUsers() {
                           {u.subscriptionPlan}
                         </Badge>
                       </TableCell>
-                      <TableCell>
-                        <div className="text-sm font-mono text-yellow-400 flex items-center gap-1">
-                          <Coins className="h-3 w-3" /> {u.coins.toLocaleString()}
-                        </div>
-                      </TableCell>
+                      <TableCell className="text-xs font-mono text-muted-foreground">{u.subscriptionExpiresAt ? format(new Date(u.subscriptionExpiresAt), "MMM d, yyyy") : "—"}</TableCell>
                       <TableCell>
                         {u.isBanned ? (
                           <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-mono text-[10px]">BANNED</Badge>
@@ -233,10 +229,6 @@ export default function AdminUsers() {
                               {u.email}
                             </DropdownMenuLabel>
                             <DropdownMenuSeparator className="bg-border/50" />
-                            
-                            <DropdownMenuItem onClick={() => openModal("coins", u)} className="cursor-pointer text-yellow-400 focus:text-yellow-400 focus:bg-yellow-400/10">
-                              <Coins className="mr-2 h-3 w-3" /> Adjust Coins
-                            </DropdownMenuItem>
                             
                             <DropdownMenuItem onClick={() => openModal("plan", u)} className="cursor-pointer text-secondary focus:text-secondary focus:bg-secondary/10">
                               <Crown className="mr-2 h-3 w-3" /> Override Plan

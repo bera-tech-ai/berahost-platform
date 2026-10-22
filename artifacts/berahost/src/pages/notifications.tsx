@@ -5,7 +5,7 @@ import {
   AlertCircle,
   Info,
   Server,
-  Coins,
+  CreditCard,
   ShieldCheck,
   Trash2
 } from "lucide-react";
@@ -56,7 +56,7 @@ export default function NotificationsPage() {
     const t = title.toLowerCase();
     if (t.includes('deployed') || t.includes('server')) return <Server className="h-5 w-5 text-primary" />;
     if (t.includes('fail') || t.includes('crash') || t.includes('error')) return <AlertCircle className="h-5 w-5 text-destructive" />;
-    if (t.includes('coin') || t.includes('payment') || t.includes('bonus')) return <Coins className="h-5 w-5 text-secondary" />;
+    if (t.includes('payment') || t.includes('bonus')) return <CreditCard className="h-5 w-5 text-secondary" />;
     if (t.includes('success') || t.includes('complete')) return <CheckCircle2 className="h-5 w-5 text-accent" />;
     if (t.includes('admin') || t.includes('system')) return <ShieldCheck className="h-5 w-5 text-primary" />;
     return <Info className="h-5 w-5 text-muted-foreground" />;

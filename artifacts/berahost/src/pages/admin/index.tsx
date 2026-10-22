@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
-  Users, Server, Coins, Activity, TrendingUp, Ticket, ShieldAlert, ArrowRight,
+  Users, Server, Activity, TrendingUp, Ticket, CreditCard, ShieldAlert, ArrowRight,
   LifeBuoy, Settings, Cpu, HardDrive, MemoryStick, Zap, RefreshCw, StopCircle,
   AlertTriangle, Radio, CheckCircle, Wifi, Globe, Terminal, Megaphone,
   MessageSquare, X
@@ -137,7 +137,7 @@ export default function AdminDashboard() {
     { title: "Total Users", value: stats?.totalUsers || 0, icon: Users, color: "text-primary", link: "/admin/users" },
     { title: "Active Bots", value: stats?.activeBots || 0, icon: Radio, color: "text-accent", link: "/admin/deployments" },
     { title: "Today's Revenue", value: `KES ${(stats?.todayRevenue || 0).toLocaleString()}`, icon: TrendingUp, color: "text-secondary", link: null },
-    { title: "Coins in Circulation", value: (stats?.coinsInCirculation || 0).toLocaleString(), icon: Coins, color: "text-yellow-400", link: null },
+    { title: "Active Subscriptions", value: ((stats as any)?.activeSubscriptions || 0).toLocaleString(), icon: CreditCard, color: "text-yellow-400", link: "/admin/payments" },
     { title: "Total Deployments", value: stats?.totalDeployments || 0, icon: Activity, color: "text-primary", link: "/admin/deployments" },
     { title: "Open Tickets", value: stats?.openTickets || 0, icon: Ticket, color: "text-destructive", link: "/admin/support" },
   ];

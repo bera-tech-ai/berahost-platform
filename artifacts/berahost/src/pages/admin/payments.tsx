@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, CreditCard, CheckCircle2, Clock, XCircle,
-  Zap, Phone, Package, Coins, RefreshCw, AlertTriangle, Search
+  Zap, Phone, Package, RefreshCw, AlertTriangle, Search
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,7 +58,7 @@ export default function AdminPaymentsPage() {
       if (data.error) {
         toast({ title: "Error", description: data.error, variant: "destructive" });
       } else {
-        toast({ title: "Coins Credited!", description: data.message });
+        toast({ title: "Payment Updated", description: data.message });
         qc.invalidateQueries({ queryKey: ["admin", "payments"] });
       }
       setConfirmTxn(null);
@@ -180,7 +180,7 @@ export default function AdminPaymentsPage() {
                 <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> Phone</span>
                 <span className="flex items-center gap-1"><Package className="w-3 h-3" /> Package</span>
                 <span>Amount</span>
-                <span className="flex items-center gap-1"><Coins className="w-3 h-3" /> Coins</span>
+                <span className="flex items-center gap-1"><CreditCard className="w-3 h-3" /> Payment</span>
                 <span>Date</span>
                 <span>Status</span>
               </div>
@@ -200,7 +200,7 @@ export default function AdminPaymentsPage() {
                     KES {Number(txn.amountKes || 0).toLocaleString()}
                   </span>
                   <span className="font-mono text-xs text-yellow-400">
-                    {txn.coinsAwarded > 0 ? `+${txn.coinsAwarded}` : "—"}
+                    {txn.paymentAwarded > 0 ? `+${txn.paymentAwarded}` : "—"}
                   </span>
                   <span className="font-mono text-[10px] text-muted-foreground">
                     {txn.createdAt ? format(new Date(txn.createdAt), "MMM d, HH:mm") : "—"}
@@ -230,11 +230,11 @@ export default function AdminPaymentsPage() {
         <DialogContent className="bg-black border-white/10 max-w-md">
           <DialogHeader>
             <DialogTitle className="font-mono flex items-center gap-2 text-yellow-400">
-              <AlertTriangle className="h-5 w-5" /> Force Credit Coins?
+              <AlertTriangle className="h-5 w-5" /> Force Confirm Payment?
             </DialogTitle>
             <DialogDescription className="text-sm">
               This will manually mark transaction <span className="font-mono text-foreground">#{confirmTxn?.id}</span> as
-              successful and award <span className="font-mono text-yellow-400">{confirmTxn?.coinsAwarded} coins</span> to
+              successful and award <span className="font-mono text-yellow-400">{confirmTxn?.paymentAwarded} payment</span> to
               user <span className="font-mono text-foreground">#{confirmTxn?.userId}</span>.
               Use only when M-Pesa charged the user but the callback failed.
             </DialogDescription>

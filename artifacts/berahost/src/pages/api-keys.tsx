@@ -64,21 +64,21 @@ const SCOPES = [
     label: "Read",
     color: "text-blue-400",
     bg: "bg-blue-400/10 border-blue-400/30",
-    description: "View deployments, logs, metrics, coin balance, payment history",
+    description: "View deployments, logs, metrics, subscription status, payment history",
   },
   {
     id: "write",
     label: "Write",
     color: "text-green-400",
     bg: "bg-green-400/10 border-green-400/30",
-    description: "Deploy bots, start/stop, update session ID & env vars, claim daily coins",
+    description: "Deploy bots, start/stop, update session ID & env vars, check subscription expiry",
   },
   {
     id: "payments",
     label: "Payments",
     color: "text-yellow-400",
     bg: "bg-yellow-400/10 border-yellow-400/30",
-    description: "Initiate M-Pesa payments, buy coin packages, redeem vouchers",
+    description: "Initiate M-Pesa payments, purchase subscriptions and domain add-ons",
   },
 ] as const;
 
@@ -483,8 +483,8 @@ print(r.json())`} />
                   <span>Scope</span><span>Can also use</span><span>What it allows</span>
                 </div>
                 {[
-                  { scope: "read", color: "text-blue-400", implies: "—", what: "GET all resources (deployments, logs, metrics, coins, payments)" },
-                  { scope: "write", color: "text-green-400", implies: "read", what: "Deploy, start, stop, update env vars, claim daily coins" },
+                  { scope: "read", color: "text-blue-400", implies: "—", what: "GET all resources (deployments, logs, metrics, payments)" },
+                  { scope: "write", color: "text-green-400", implies: "read", what: "Deploy, start, stop, update env vars, check subscription expiry" },
                   { scope: "payments", color: "text-yellow-400", implies: "read", what: "Initiate M-Pesa STK push, subscribe to plans, redeem vouchers" },
                 ].map(row => (
                   <div key={row.scope} className="grid grid-cols-3 px-4 py-2 border-t border-border/20 items-center">
@@ -506,7 +506,7 @@ print(r.json())`} />
                   description="List all your bot deployments."
                   responseExample={`[{ "id": 1, "botId": 1, "status": "running", "createdAt": "..." }]`} />
                 <Endpoint method="POST" path="/api/deployments" scope="write"
-                  description="Deploy a new bot. Deducts coins. Returns the new deployment."
+                  description="Deploy a new bot. Requires an active subscription. Returns the new deployment."
                   body={`{ "botId": 1, "envVars": { "SESSION_ID": "Gifted~xxx..." } }`}
                   responseExample={`{ "id": 24, "status": "starting", "port": 3124 }`} />
                 <Endpoint method="GET" path="/api/deployments/:id" scope="read"
@@ -529,32 +529,25 @@ print(r.json())`} />
                   description="Download all logs as a plain-text file." />
               </div>
 
-              <p className="text-xs font-mono text-primary/60 mb-2 uppercase tracking-widest">Coins</p>
+              <p className="text-xs font-mono text-primary/60 mb-2 uppercase tracking-widest">Subscriptions</p>
               <div className="space-y-1.5 mb-4">
-                <Endpoint method="GET" path="/api/coins/balance" scope="read"
-                  description="Get your current coin balance."
-                  responseExample={`{ "balance": 450 }`} />
-                <Endpoint method="GET" path="/api/coins/transactions" scope="read"
-                  description="Get your full coin transaction history." />
-                <Endpoint method="POST" path="/api/coins/daily-claim" scope="write"
-                  description="Claim your daily free coins (once every 24 hours)."
-                  responseExample={`{ "awarded": 10, "newBalance": 460 }`} />
-                <Endpoint method="POST" path="/api/coins/redeem" scope="payments"
-                  description="Redeem a voucher code for coins."
-                  body={`{ "code": "PROMO-XXXX" }`} />
+                <Endpoint method="GET" path="/api/subscriptions/status" scope="read"
+                  description="Get your current subscription status and expiry." />
+                <Endpoint method="GET" path="/api/payments/history" scope="read"
+                  description="Get your payment transaction history." />
               </div>
 
               <p className="text-xs font-mono text-primary/60 mb-2 uppercase tracking-widest">Payments (M-Pesa)</p>
               <div className="space-y-1.5 mb-4">
                 <Endpoint method="GET" path="/api/payments/plans" scope="read"
-                  description="List all available coin packages and prices. No auth required." />
-                <Endpoint method="POST" path="/api/payments/initiate" scope="payments"
-                  description="Initiate an M-Pesa STK push to buy a coin package."
-                  body={`{ "packageId": "starter", "phoneNumber": "254712345678" }`}
+                  description="List available monthly subscription plans. No auth required." />
+                <Endpoint method="POST" path="/api/payments/subscribe" scope="payments"
+                  description="Initiate an M-Pesa STK push for a monthly subscription."
+                  body={`{ "plan": "starter", "phone": "254712345678" }`}
                   responseExample={`{ "transactionId": 42, "status": "pending", "message": "STK push sent" }`} />
                 <Endpoint method="GET" path="/api/payments/status/:id" scope="read"
                   description="Poll the status of an M-Pesa payment transaction."
-                  responseExample={`{ "status": "completed", "coinsAwarded": 100 }`} />
+                  responseExample={`{ "status": "completed", "subscriptionPlan": "starter" }`} />
                 <Endpoint method="GET" path="/api/payments/history" scope="read"
                   description="Get all your past payment transactions." />
               </div>
@@ -604,9 +597,9 @@ while (status === "starting" || status === "installing") {
   console.log("Status:", status);
 }
 
-// 3. Check coin balance after deployment
-const coins = await fetch(\`\${API}/coins/balance\`, { headers: hdrs }).then(r => r.json());
-console.log("Remaining coins:", coins.balance);`} />
+// 3. Check subscription status after deployment
+const subscription = await fetch(\`\${API}/subscriptions/status\`, { headers: hdrs }).then(r => r.json());
+console.log("Subscription expires:", subscription.expiresAt);`} />
                 </TabsContent>
                 <TabsContent value="py2">
                   <CodeBlock lang="python" code={`import requests, time
@@ -631,8 +624,8 @@ while status in ("starting", "installing"):
     print("Status:", status)
 
 # 3. Coin balance
-coins = requests.get(f"{API}/coins/balance", headers=HDRS).json()
-print("Remaining coins:", coins["balance"])`} />
+subscription = requests.get(f"{API}/subscriptions/status", headers=HDRS).json()
+print("Subscription expires:", subscription["expiresAt"])`} />
                 </TabsContent>
                 <TabsContent value="curl2">
                   <CodeBlock lang="bash" code={`# Deploy
@@ -663,7 +656,7 @@ curl -X POST ${apiBase}/deployments/24/stop \\
                   ["401", "Unauthorized", "Missing or invalid API key"],
                   ["401", "Invalid or expired API key", "Key revoked, or past expiry date"],
                   ["403", "API key missing required scope", "Key doesn't have the scope needed for this endpoint"],
-                  ["402", "Insufficient coins", "Not enough coins to deploy"],
+                  ["402", "Subscription required", "An active subscription is required to deploy"],
                   ["404", "Deployment not found", "ID doesn't exist or belongs to another user"],
                   ["429", "Too many requests", "Rate limit hit — back off and retry"],
                 ].map(([code, err, cause], i) => (

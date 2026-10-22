@@ -36,11 +36,12 @@ router.get("/admin/stats", requireAdmin, async (req, res): Promise<void> => {
     .where(sql`${paymentTransactionsTable.createdAt} >= ${today} AND ${paymentTransactionsTable.status} = 'success'`);
 
   const [totalDepsResult] = await db.select({ count: count() }).from(deploymentsTable);
+  const [activeSubscriptionsResult] = await db.select({ count: count() }).from(usersTable).where(sql`${usersTable.subscriptionPlan} <> 'free' AND ${usersTable.subscriptionExpiresAt} > NOW()`);
 
   res.json({
     totalUsers: totalUsersResult.count,
     activeBots: activeBotsResult.count,
-    coinsInCirculation: Number(coinsResult.total) || 0,
+    activeSubscriptions: activeSubscriptionsResult.count,
     todayRevenue: Number(revenueResult.total) || 0,
     totalDeployments: totalDepsResult.count,
     openTickets: openTicketsResult.count,
