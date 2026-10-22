@@ -147,7 +147,6 @@ export default function AdminDashboard() {
     { name: "User Management", path: "/admin/users", icon: Users },
     { name: "Bot Templates", path: "/admin/bots", icon: Server },
     { name: "All Deployments", path: "/admin/deployments", icon: Activity },
-    { name: "Voucher Codes", path: "/admin/vouchers", icon: Ticket },
     { name: "Support Tickets", path: "/admin/support", icon: LifeBuoy },
     { name: "Audit Logs", path: "/admin/audit-logs", icon: ShieldAlert },
     { name: "Transactions", path: "/admin/payments", icon: TrendingUp },

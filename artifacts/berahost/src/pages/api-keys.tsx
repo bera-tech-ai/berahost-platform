@@ -485,7 +485,7 @@ print(r.json())`} />
                 {[
                   { scope: "read", color: "text-blue-400", implies: "—", what: "GET all resources (deployments, logs, metrics, payments)" },
                   { scope: "write", color: "text-green-400", implies: "read", what: "Deploy, start, stop, update env vars, check subscription expiry" },
-                  { scope: "payments", color: "text-yellow-400", implies: "read", what: "Initiate M-Pesa STK push, subscribe to plans, redeem vouchers" },
+                  { scope: "payments", color: "text-yellow-400", implies: "read", what: "Initiate M-Pesa STK push and subscribe to monthly plans" },
                 ].map(row => (
                   <div key={row.scope} className="grid grid-cols-3 px-4 py-2 border-t border-border/20 items-center">
                     <Badge variant="outline" className={`w-fit text-[11px] font-mono ${row.color}`}>{row.scope}</Badge>
@@ -623,7 +623,7 @@ while status in ("starting", "installing"):
     status = d["status"]
     print("Status:", status)
 
-# 3. Coin balance
+# 3. Subscription status
 subscription = requests.get(f"{API}/subscriptions/status", headers=HDRS).json()
 print("Subscription expires:", subscription["expiresAt"])`} />
                 </TabsContent>

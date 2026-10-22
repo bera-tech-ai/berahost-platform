@@ -3,12 +3,12 @@ import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
-  Users, ArrowLeft, Ban, CheckCircle2, Coins, Shield, ShieldAlert,
+  Users, ArrowLeft, Ban, CheckCircle2, Shield, ShieldAlert,
   Search, MoreVertical, UserCheck, LogIn, KeyRound, Crown, AlertTriangle,
   Star, Skull, Copy, ChevronDown, Trash2
 } from "lucide-react";
 import { 
-  useAdminListUsers, useAdminBanUser, useAdminAdjustCoins, useGetMe
+  useAdminListUsers, useAdminBanUser, useGetMe
 } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -36,7 +36,7 @@ const PLAN_COLORS: Record<string, string> = {
   gold: "text-yellow-400 border-yellow-400/30",
 };
 
-type ModalType = "coins" | "plan" | "reset-password" | "abuse-flag" | null;
+type ModalType = "plan" | "reset-password" | "abuse-flag" | null;
 
 export default function AdminUsers() {
   const { data: user } = useGetMe();
@@ -49,10 +49,6 @@ export default function AdminUsers() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [modal, setModal] = useState<ModalType>(null);
-
-  // Coin adjust state
-  const [coinAmount, setCoinAmount] = useState("");
-  const [coinReason, setCoinReason] = useState("");
 
   // Plan override state
   const [newPlan, setNewPlan] = useState("free");
@@ -75,13 +71,6 @@ export default function AdminUsers() {
     mutationFn: (id: number) => apiFetch(`/admin/users/${id}`, { method: "DELETE" }).then(r => r.json()),
     onSuccess: (d) => { toast({ title: "User deleted", description: d.message }); refetch(); },
     onError: (err: any) => toast({ title: "Delete failed", description: err.error || "Unable to delete user", variant: "destructive" }),
-  });
-
-  const adjustCoinsMutation = useAdminAdjustCoins({
-    mutation: {
-      onSuccess: () => { toast({ title: "Coins Adjusted" }); closeModal(); refetch(); },
-      onError: (err) => toast({ title: "Error", description: (err as any).error || "Failed", variant: "destructive" }),
-    }
   });
 
   const planMutation = useMutation({
@@ -134,7 +123,6 @@ export default function AdminUsers() {
   const closeModal = () => {
     setModal(null);
     setSelectedUser(null);
-    setCoinAmount(""); setCoinReason("");
     setNewPlan("free"); setPlanReason("");
     setNewPassword(""); setAbuseNote("");
   };
@@ -302,35 +290,6 @@ export default function AdminUsers() {
           )}
         </CardContent>
       </Card>
-
-      {/* COINS DIALOG */}
-      <Dialog open={modal === "coins"} onOpenChange={closeModal}>
-        <DialogContent className="border-yellow-500/30 bg-card/95 backdrop-blur-xl max-w-md">
-          <DialogHeader>
-            <DialogTitle className="font-black text-xl text-yellow-400 flex items-center gap-2">
-              <Coins className="h-5 w-5" /> ADJUST COINS
-            </DialogTitle>
-            <DialogDescription className="font-mono text-xs">{selectedUser?.email}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Amount (+ add / − deduct)</label>
-              <Input type="number" placeholder="e.g. 50 or -20" value={coinAmount} onChange={(e) => setCoinAmount(e.target.value)}
-                className="bg-background/50 font-mono border-yellow-500/30" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-mono text-muted-foreground uppercase">Reason (audit log)</label>
-              <Input placeholder="e.g. Refund for crashed instance" value={coinReason} onChange={(e) => setCoinReason(e.target.value)}
-                className="bg-background/50 font-mono border-yellow-500/30" />
-            </div>
-            <Button className="w-full font-mono bg-yellow-500 hover:bg-yellow-500/90 text-black font-bold"
-              onClick={() => adjustCoinsMutation.mutate({ id: selectedUser.id, data: { amount: parseInt(coinAmount, 10), reason: coinReason } })}
-              disabled={adjustCoinsMutation.isPending || !coinAmount || !coinReason}>
-              {adjustCoinsMutation.isPending ? "Processing..." : "EXECUTE ADJUSTMENT"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* PLAN DIALOG */}
       <Dialog open={modal === "plan"} onOpenChange={closeModal}>

@@ -34,7 +34,6 @@ import AdminDashboard from "@/pages/admin/index";
 import AdminUsers from "@/pages/admin/users";
 import AdminBots from "@/pages/admin/bots";
 import AdminDeployments from "@/pages/admin/deployments";
-import AdminVouchers from "@/pages/admin/vouchers";
 import AdminSupport from "@/pages/admin/support";
 import AdminTicketDetail from "@/pages/admin/support-ticket";
 import AdminAuditLogs from "@/pages/admin/audit-logs";
@@ -93,7 +92,6 @@ function Router() {
       <Route path="/admin/users"><ProtectedRoute component={AdminUsers} /></Route>
       <Route path="/admin/bots"><ProtectedRoute component={AdminBots} /></Route>
       <Route path="/admin/deployments"><ProtectedRoute component={AdminDeployments} /></Route>
-      <Route path="/admin/vouchers"><ProtectedRoute component={AdminVouchers} /></Route>
       <Route path="/admin/support"><ProtectedRoute component={AdminSupport} /></Route>
       <Route path="/admin/support/:id"><ProtectedRoute component={AdminTicketDetail} /></Route>
       <Route path="/admin/audit-logs"><ProtectedRoute component={AdminAuditLogs} /></Route>
