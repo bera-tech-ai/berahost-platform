@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Github, Loader2, MessageSquare, ArrowLeft, CheckCircle2, RotateCcw, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { Github, Chrome, Loader2, MessageSquare, ArrowLeft, CheckCircle2, RotateCcw, Eye, EyeOff, ShieldCheck } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -55,6 +55,8 @@ export default function Login() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("github") === "unconfigured") toast({ title: "GitHub sign-in unavailable", description: "The administrator has not finished configuring the GitHub OAuth App.", variant: "destructive" });
     if (params.get("github") === "error") toast({ title: "GitHub sign-in failed", description: params.get("message") || "Please try again.", variant: "destructive" });
+    if (params.get("google") === "unconfigured") toast({ title: "Google sign-in unavailable", description: "Google sign-in is not configured yet.", variant: "destructive" });
+    if (params.get("google") === "error") toast({ title: "Google sign-in failed", description: params.get("message") || "Please try again.", variant: "destructive" });
   }, [toast]);
 
   const loginForm = useForm<LoginForm>({
@@ -299,6 +301,7 @@ export default function Login() {
             {mode === "login" && <>
               <div className="flex w-full items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-muted-foreground"><span className="h-px flex-1 bg-border/70" />or<span className="h-px flex-1 bg-border/70" /></div>
               <Button type="button" variant="outline" className="w-full border-primary/30 bg-background/40" onClick={() => { window.location.href = `${BASE}api/auth/github?returnTo=/dashboard`; }}><Github className="mr-2 h-4 w-4" /> Continue with GitHub</Button>
+              <Button type="button" variant="outline" className="w-full border-primary/30 bg-background/40" onClick={() => { window.location.href = `${BASE}api/auth/google?returnTo=/dashboard`; }}><Chrome className="mr-2 h-4 w-4" /> Continue with Google</Button>
               <p className="text-[11px] text-muted-foreground">GitHub sign-in also lets you deploy repositories you authorize, including private repositories.</p>
             </>}
             <div className="text-muted-foreground font-mono text-xs">

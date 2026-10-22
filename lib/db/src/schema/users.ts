@@ -24,6 +24,8 @@ export const usersTable = pgTable("users", {
   githubLogin: varchar("github_login", { length: 100 }),
   githubAvatarUrl: text("github_avatar_url"),
   githubAccessTokenEncrypted: text("github_access_token_encrypted"),
+  googleId: varchar("google_id", { length: 100 }).unique(),
+  googleAvatarUrl: text("google_avatar_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

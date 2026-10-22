@@ -78,3 +78,7 @@ Use a **Git-native control room**: repository identity is primary, branch and co
 - `artifacts/berahost/src/pages/web-deployments.tsx`: connected-repository deployment flow and auto-deploy controls.
 
 GitHub OAuth requires an OAuth App callback URL of `https://berahost-bfer3udn.manus.space/api/auth/github/callback` and secrets `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_TOKEN_ENCRYPTION_KEY`. Use the GitHub `repo` scope for private repository contents and webhook management. Webhook endpoints remain unauthenticated but HMAC-protected; tokens are never returned to browsers or logs.
+
+## Google sign-in extension
+
+Add Google OAuth as a second external sign-in provider while preserving password and GitHub login. Use server-side authorization-code exchange with `openid email profile`, validate the returned verified email, match an existing BERAHOST account by Google subject or email, and create a new account with a generated password hash when no match exists. Store only the Google subject and avatar metadata; never store or expose Google access tokens. Bind OAuth state to the existing session, use the fixed public callback URL `https://berahost-bfer3udn.manus.space/api/auth/google/callback`, and keep return paths limited to internal application routes.

@@ -9,6 +9,7 @@ import { requireAdmin } from "../middlewares/requireAdmin";
 import { addCoins } from "../lib/coins";
 import { sendWhatsAppMessage, getWASenderStatus } from "../lib/waSender";
 import { encryptGithubToken, exchangeGithubCode, getGithubIdentity, githubCallbackUrl, githubConfigured, publicBaseUrl } from "../lib/github";
+import { exchangeGoogleCode, getGoogleIdentity, googleAuthorizationUrl, googleCallbackUrl, googleConfigured, googleState } from "../lib/google";
 
 const router = Router();
 
@@ -285,6 +286,48 @@ router.get("/auth/github/callback", async (req, res): Promise<void> => {
   } catch (error: any) {
     const message = encodeURIComponent(error?.message || "GitHub sign-in failed");
     res.redirect(`${publicBaseUrl(req as any)}/login?github=error&message=${message}`);
+  }
+});
+
+router.get("/auth/google", (req, res): void => {
+  if (!googleConfigured()) {
+    res.redirect(`${publicBaseUrl(req as any)}/login?google=unconfigured`);
+    return;
+  }
+  const returnTo = String(req.query.returnTo || "/dashboard");
+  const safeReturnTo = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/dashboard";
+  const state = googleState();
+  (req.session as any).googleOAuth = { state, returnTo: safeReturnTo };
+  res.redirect(googleAuthorizationUrl(state, googleCallbackUrl(req as any)));
+});
+
+router.get("/auth/google/callback", async (req, res): Promise<void> => {
+  const oauth = (req.session as any).googleOAuth;
+  delete (req.session as any).googleOAuth;
+  if (!oauth || !req.query.state || String(req.query.state) !== oauth.state) {
+    res.status(400).send("Google sign-in expired or was invalid. Please try again.");
+    return;
+  }
+  try {
+    const code = String(req.query.code || "");
+    if (!code) throw new Error("Google did not return an authorization code.");
+    const accessToken = await exchangeGoogleCode(code, googleCallbackUrl(req as any));
+    const identity = await getGoogleIdentity(accessToken);
+    if (!identity.emailVerified) throw new Error("Google returned an unverified email address.");
+    let [user] = await db.select().from(usersTable).where(eq(usersTable.googleId, identity.id));
+    if (!user) [user] = await db.select().from(usersTable).where(eq(usersTable.email, identity.email));
+    if (!user) {
+      [user] = await db.insert(usersTable).values({ email: identity.email, passwordHash: await hashPassword(crypto.randomBytes(32).toString("hex")), displayName: identity.name, avatarUrl: identity.avatarUrl, googleId: identity.id, googleAvatarUrl: identity.avatarUrl, isVerified: true, subscriptionPlan: "free", coins: 0, referralCode: generateReferralCode() }).returning();
+    } else if (user.isBanned || user.deletedAt) {
+      throw new Error("Account banned. Contact support.");
+    }
+    [user] = await db.update(usersTable).set({ googleId: identity.id, googleAvatarUrl: identity.avatarUrl, isVerified: true, ...(user.displayName ? {} : { displayName: identity.name }), ...(user.avatarUrl ? {} : { avatarUrl: identity.avatarUrl }) }).where(eq(usersTable.id, user.id)).returning();
+    (req.session as any).userId = user.id;
+    const separator = oauth.returnTo.includes("?") ? "&" : "?";
+    res.redirect(`${publicBaseUrl(req as any)}${oauth.returnTo}${separator}google=connected`);
+  } catch (error: any) {
+    const message = encodeURIComponent(error?.message || "Google sign-in failed");
+    res.redirect(`${publicBaseUrl(req as any)}/login?google=error&message=${message}`);
   }
 });
 

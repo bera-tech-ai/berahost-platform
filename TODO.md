@@ -39,3 +39,9 @@
 - Auto deploy is enabled by default for connected web deployments, creates a signed GitHub push webhook, filters to the selected branch, records commit metadata, and redeploys the latest revision after each matching commit.
 - Users can disable auto deploy, reconnect/disconnect GitHub, and delete a deployment; deletion removes its managed webhook, runtime, temporary build files, and dependent domain orders.
 - Existing pasted public URL deployments and existing manually configured bot webhooks remain functional.
+
+## ⏳ Google OAuth sign-in
+- The login screen offers “Continue with Google” alongside password and GitHub sign-in.
+- Google OAuth uses the public callback `https://berahost-bfer3udn.manus.space/api/auth/google/callback`, validates state, exchanges the authorization code server-side, and requests only OpenID profile/email identity scopes.
+- Existing BERAHOST accounts are matched by Google subject or verified email; new accounts receive a generated password hash and verified status.
+- Google client credentials are stored as protected server secrets and are never shipped to the browser, logged, or persisted as access tokens.

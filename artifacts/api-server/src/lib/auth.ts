@@ -45,6 +45,8 @@ export function serializeUser(user: typeof usersTable.$inferSelect) {
     githubConnected: Boolean(user.githubId && user.githubAccessTokenEncrypted),
     githubLogin: user.githubLogin ?? null,
     githubAvatarUrl: user.githubAvatarUrl ?? null,
+    googleConnected: Boolean(user.googleId),
+    googleAvatarUrl: user.googleAvatarUrl ?? null,
     createdAt: user.createdAt.toISOString(),
   };
 }
