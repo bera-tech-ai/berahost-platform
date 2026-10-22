@@ -3,7 +3,7 @@ import { Server as SocketIOServer } from "socket.io";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { setIoEmitter, setPairingCodeEmitter, setUserAlertEmitter, startBotProcess, sendStdin, stopBotProcess } from "./lib/botProcess";
-import { stopWebDeployment } from "./lib/webProcess";
+import { startWebDeployment, stopWebDeployment } from "./lib/webProcess";
 import { initSessionTable } from "./lib/session";
 import { db, deploymentsTable, botsTable, usersTable, platformSettingsTable, notificationsTable, webDeploymentsTable } from "@workspace/db";
 import { eq, inArray, count, lt, ne, and } from "drizzle-orm";
@@ -249,6 +249,11 @@ async function main() {
       .catch((err) => {
         logger.error({ err }, "Bot auto-restore FAILED");
       });
+    restoreRunningWebDeployments()
+      .then(() => logger.info("Web deployment restore complete"))
+      .catch((err) => {
+        logger.error({ err }, "Web deployment restore FAILED");
+      });
 
     // ─── Self-keepalive ────────────────────────────────────────────────────
     // Replit Autoscale scales to ZERO instances when there is no inbound
@@ -304,6 +309,18 @@ async function reconcileExpiredSubscriptions() {
     for (const web of webs) await stopWebDeployment(web.id).catch(() => {});
     await db.update(usersTable).set({ subscriptionPlan: "free" }).where(eq(usersTable.id, user.id));
     logger.info({ userId: user.id }, "Expired subscription reconciled; hosted deployments retained and stopped");
+  }
+}
+
+async function restoreRunningWebDeployments(): Promise<void> {
+  const rows = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.status, "running"));
+  if (rows.length === 0) {
+    logger.info("No web deployments to restore on startup");
+    return;
+  }
+  logger.info({ count: rows.length }, "Restoring web deployments from previous session...");
+  for (const row of rows) {
+    await startWebDeployment(row.id).catch((err: unknown) => logger.error({ err, webDeploymentId: row.id }, "Web deployment restore failed"));
   }
 }
 

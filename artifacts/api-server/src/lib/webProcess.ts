@@ -124,7 +124,7 @@ export async function startWebDeployment(id: number): Promise<void> {
     if (!staticRoot && !pkg.scripts && (await fs.stat(path.join(root, "index.html")).catch(() => null))?.isFile()) staticRoot = root;
     const startCommand = deployment.startCommand || (pkg.scripts?.start ? "npm start" : "");
     if (staticRoot && !startCommand) {
-      await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot), runtimePort: null, pid: null, buildLog: "Static site built and ready.", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+      await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: path.relative(root, staticRoot) || ".", runtimePort: null, pid: null, buildLog: "Static site built and ready.", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
       return;
     }
     if (!startCommand) throw new Error("No build output or start command was found. Add a build/start command or a package.json script.");
