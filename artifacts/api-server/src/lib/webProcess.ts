@@ -89,9 +89,23 @@ function detectStartCommand(pkg: any, hasStaticOutput: boolean): string {
 
 async function findPackageRoot(root: string): Promise<{ root: string; pkg: any }> {
   const candidates = [root, "frontend", "client", "app", "website", "web"];
-  for (const relative of candidates) {
-    const candidate = path.join(root, relative);
-    try { return { root: candidate, pkg: JSON.parse(await fs.readFile(path.join(candidate, "package.json"), "utf8")) }; } catch { /* try next candidate */ }
+  const visited = new Set<string>();
+  const queue = candidates.map((relative) => path.resolve(root, relative));
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
+    if (visited.has(candidate)) continue;
+    visited.add(candidate);
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(candidate, "package.json"), "utf8"));
+      return { root: candidate, pkg };
+    } catch { /* inspect supported nested project directories below */ }
+    const relativeDepth = path.relative(root, candidate).split(path.sep).filter(Boolean).length;
+    if (relativeDepth >= 3) continue;
+    for (const entry of await fs.readdir(candidate, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith(".")) {
+        queue.push(path.join(candidate, entry.name));
+      }
+    }
   }
   return { root, pkg: {} };
 }
@@ -160,6 +174,11 @@ export async function startWebDeployment(id: number): Promise<void> {
     const project = await findPackageRoot(root);
     const packageRoot = project.root;
     const pkg = project.pkg;
+    if (Object.keys(pkg).length > 0) {
+      await appendBuildLog(id, `[BERAHOST] Detected package manifest in ${path.relative(root, packageRoot) || "."}.`);
+    } else {
+      await appendBuildLog(id, "[BERAHOST] No readable package.json was found in the extracted repository.");
+    }
     const installCommand = await fs.access(path.join(packageRoot, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(packageRoot, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --no-audit --no-fund"));
     if (Object.keys(pkg).length > 0) {
       const installLog = await run(installCommand, packageRoot, envVars);
