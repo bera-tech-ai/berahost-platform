@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import { spawn, execFile } from "child_process";
 import { promisify } from "util";
+import net from "net";
 import crypto from "crypto";
 import { db, webDeploymentsTable, domainOrdersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
@@ -54,6 +55,23 @@ async function run(command: string, cwd: string, env: Record<string, string>, ti
   return `${result.stdout || ""}${result.stderr || ""}`.slice(-120000);
 }
 
+async function waitForPort(port: number, child: ReturnType<typeof spawn>, timeoutMs = 30_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (child.exitCode !== null || child.signalCode) throw new Error("Web process exited before opening its assigned port.");
+    const reachable = await new Promise<boolean>((resolve) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port });
+      const finish = (ok: boolean) => { socket.destroy(); resolve(ok); };
+      socket.once("connect", () => finish(true));
+      socket.once("error", () => finish(false));
+      socket.setTimeout(1000, () => finish(false));
+    });
+    if (reachable) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Web process did not listen on port ${port} within ${timeoutMs / 1000}s.`);
+}
+
 async function downloadGithubRepository(repoUrl: string, branch: string, root: string): Promise<void> {
   const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
   if (!match) throw new Error("Only public GitHub repositories are supported.");
@@ -92,9 +110,15 @@ export async function startWebDeployment(id: number): Promise<void> {
     let pkg: any = {};
     try { pkg = JSON.parse(await fs.readFile(packagePath, "utf8")); } catch { /* static repository */ }
     const installCommand = await fs.access(path.join(root, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(root, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --no-audit --no-fund"));
-    if (pkg.scripts || Object.keys(pkg).length === 0) await run(installCommand, root, envVars);
+    if (pkg.scripts || Object.keys(pkg).length === 0) {
+      const installLog = await run(installCommand, root, envVars);
+      await db.update(webDeploymentsTable).set({ buildLog: `Dependencies installed.\n${installLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+    }
     const buildCommand = deployment.buildCommand || (pkg.scripts?.build ? "npm run build" : "");
-    if (buildCommand) await run(buildCommand, root, { ...envVars, PORT: String(port) });
+    if (buildCommand) {
+      const buildLog = await run(buildCommand, root, { ...envVars, PORT: String(port) });
+      await db.update(webDeploymentsTable).set({ buildLog: `Build completed.\n${buildLog}`, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+    }
     const candidates = ["dist", "build", "out", "public"].map((dir) => path.join(root, dir));
     const staticRoot = (await Promise.all(candidates.map(async (candidate) => (await fs.stat(candidate).catch(() => null))?.isDirectory() ? candidate : null))).find(Boolean) as string | undefined;
     const startCommand = deployment.startCommand || (pkg.scripts?.start ? "npm start" : "");
@@ -106,12 +130,23 @@ export async function startWebDeployment(id: number): Promise<void> {
     const child = spawn("bash", ["-lc", startCommand], { cwd: root, env: { ...process.env, ...envVars, PORT: String(port), NODE_ENV: "production" }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     runningWebProcesses.set(id, child);
     let log = "Node web process started.\n";
-    const append = (chunk: Buffer) => { log = `${log}${chunk.toString()}`.slice(-120000); };
+    let logFlush: NodeJS.Timeout | undefined;
+    const append = (chunk: Buffer) => {
+      log = `${log}${chunk.toString()}`.slice(-120000);
+      if (!logFlush) {
+        logFlush = setTimeout(async () => {
+          logFlush = undefined;
+          await db.update(webDeploymentsTable).set({ buildLog: log, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id)).catch(() => {});
+        }, 250);
+      }
+    };
     child.stdout?.on("data", append); child.stderr?.on("data", append);
     child.on("exit", async (code) => {
+      if (logFlush) clearTimeout(logFlush);
       runningWebProcesses.delete(id);
-      await db.update(webDeploymentsTable).set({ status: code === 0 ? "stopped" : "crashed", pid: null, buildLog: log, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id)).catch(() => {});
+      await db.update(webDeploymentsTable).set({ status: code === 0 ? "stopped" : "crashed", pid: null, runtimePort: null, buildLog: log, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id)).catch(() => {});
     });
+    await waitForPort(port, child);
     await db.update(webDeploymentsTable).set({ status: "running", outputDirectory: null, runtimePort: port, pid: child.pid ?? null, buildLog: log, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
     child.unref();
   } catch (err: any) {
@@ -124,7 +159,7 @@ export async function stopWebDeployment(id: number): Promise<void> {
   const child = runningWebProcesses.get(id);
   if (child?.pid) { try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} } }
   runningWebProcesses.delete(id);
-  await db.update(webDeploymentsTable).set({ status: "stopped", pid: null, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
+  await db.update(webDeploymentsTable).set({ status: "stopped", pid: null, runtimePort: null, updatedAt: new Date() }).where(eq(webDeploymentsTable.id, id));
 }
 
 async function resolveDeployment(reqPath: string, host: string) {
