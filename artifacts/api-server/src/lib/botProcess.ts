@@ -1,4 +1,4 @@
-import { spawn, exec, execSync, type ChildProcess } from "child_process";
+import { spawn, exec, execSync, execFile, type ChildProcess } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs/promises";
@@ -270,6 +270,25 @@ async function injectBotSettings(
 }
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+async function downloadGithubRepository(repoUrl: string, deployPath: string): Promise<void> {
+  const match = repoUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (!match) throw new Error("Only public GitHub repositories are supported.");
+  const owner = match[1];
+  const repository = match[2];
+  const metadataResponse = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`, { headers: { "User-Agent": "BERAHOST-bot-deployer" } });
+  if (!metadataResponse.ok) throw new Error("GitHub repository is not public or could not be found. Make the repository public or configure an authenticated GitHub deploy source.");
+  const metadata = await metadataResponse.json() as { default_branch?: string };
+  const branch = metadata.default_branch;
+  if (!branch || !/^[A-Za-z0-9._/-]{1,120}$/.test(branch) || branch.includes("..")) throw new Error("GitHub repository has an invalid default branch.");
+  const response = await fetch(`https://codeload.github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tar.gz/refs/heads/${encodeURIComponent(branch)}`);
+  if (!response.ok) throw new Error(`GitHub repository download failed (${response.status}). Check that the repository and default branch are public and valid.`);
+  const archive = path.join(deployPath, ".github-source.tar.gz");
+  await fs.writeFile(archive, Buffer.from(await response.arrayBuffer()));
+  await execFileAsync("tar", ["-xzf", archive, "-C", deployPath, "--strip-components=1"], { timeout: 5 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
+  await fs.rm(archive, { force: true });
+}
 
 // In-memory map of running processes
 export const runningProcesses = new Map<number, ChildProcess>();
@@ -583,10 +602,7 @@ export async function startBotProcess(
       try {
         await fs.rm(deployPath, { recursive: true, force: true });
       } catch { /* ignore — directory may not exist */ }
-      await execAsync(
-        `git clone --depth=1 ${repoUrl} ${deployPath}`,
-        { timeout: 300_000 }  // 5 min — large repos on slow networks need time
-      );
+      await downloadGithubRepository(repoUrl, deployPath);
     }
 
     // ─── Restore full Baileys session from DB ─────────────────────────────────
