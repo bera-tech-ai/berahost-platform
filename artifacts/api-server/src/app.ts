@@ -5,6 +5,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { createSessionMiddleware } from "./lib/session";
+import { handleWebRequest } from "./lib/webProcess";
 
 const app: Express = express();
 
@@ -42,6 +43,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(createSessionMiddleware());
 
 app.use("/api", router);
+app.use(handleWebRequest);
 
 if (process.env.NODE_ENV === "production") {
   const staticDir = path.resolve(process.cwd(), "artifacts/berahost/dist/public");

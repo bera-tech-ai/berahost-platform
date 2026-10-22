@@ -17,6 +17,7 @@ export const usersTable = pgTable("users", {
   referredBy: integer("referred_by"),
   abuseFlag: boolean("abuse_flag").default(false).notNull(),
   abuseNote: text("abuse_note"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   subscriptionPlan: varchar("subscription_plan", { length: 50 }).default("free").notNull(),
   subscriptionExpiresAt: timestamp("subscription_expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

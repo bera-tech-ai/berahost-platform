@@ -35,7 +35,7 @@ export function serializeUser(user: typeof usersTable.$inferSelect) {
     displayName: user.displayName ?? null,
     avatarUrl: user.avatarUrl ?? null,
     phone: user.phone,
-    coins: user.coins,
+    coins: 0,
     isVerified: user.isVerified,
     isBanned: user.isBanned,
     isAdmin: user.isAdmin,

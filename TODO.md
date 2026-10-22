@@ -1,19 +1,32 @@
-# BERAHOST Delivery TODO
+# BERAHOST Subscription and Web Hosting TODO
 
-## Migrate the existing BERAHOST repository into the managed project
-- Preserve the existing full-stack repository structure and functionality.
-- Keep the source recovery checkout separate from the managed project.
-- Retain the React/Vite frontend, Express/Socket.IO API, Drizzle/PostgreSQL data layer, and current public routes.
+## Canonical monthly subscriptions replace coin access
+- Starter is KES 200/month with a maximum of 5 hosted bots or web deployments.
+- Silver is KES 500/month with a maximum of 13 hosted bots or web deployments.
+- Gold is KES 800/month with a maximum of 30 hosted bots or web deployments.
+- PayHero is the payment provider for plan purchases and paid custom-domain requests; coin purchases, coin deployment charges, daily coin claims, and voucher-based access are no longer part of the user deployment flow.
+- Successful payments extend the subscription for 30 days from the later of the current expiry or the callback time, and expose the resulting expiry to the user.
 
-## Make the application runnable in Preview
-- Install the checked-in pnpm workspace dependencies without bypassing lifecycle policies.
-- Start the API and frontend on the configured managed runtime listeners.
-- Verify the frontend, API health endpoint, and `/manus-routes.json` respond successfully.
+## Bot lifecycle and environment configuration
+- Existing bot deployment, session backup, auto-restart, and Socket.IO console behavior remains available.
+- Creating and starting a bot requires an active subscription and stays within the subscribed plan limit.
+- When a subscription expires or a user is banned, all running bots are stopped and their deployment records/session data remain stored for renewal or admin review.
+- Bot templates continue to scan `.env`, JSON, and JavaScript configuration values; deployment forms show required and optional variables without exposing server secrets.
+- Startup restore, crash restart, scheduled restart, and GitHub redeploy paths must refuse expired or banned users.
 
-## Prepare live publication
-- Configure the managed project build/runtime/deploy contract for the existing application.
-- Keep required protected values such as `DATABASE_URL`, `SESSION_SECRET`, and admin credentials out of source control.
-- Create a checkpoint from the verified source before publishing.
+## GitHub web deployment hosting
+- An authenticated user can submit a public GitHub repository URL, branch, optional build/start commands, and environment values.
+- The server validates the repository URL, scans env configuration, builds when a build script/command is present, serves static output when present, and runs Node web apps when a start command is present.
+- Every web deployment receives a unique hosted identity and URL, with status, logs, env scan, start/stop, and expiry state.
+- Web deployments use the same subscription limit as bot deployments, are stopped and taken offline when entitlement expires, and remain stored until renewal.
+- Users can request a custom domain for KES 134 through PayHero. Paid requests expose verification instructions/token and become routable only after verification.
 
-## Future updates
-- Apply the user’s specific requested product or design changes after they are provided.
+## Admin controls
+- Admin can ban/unban users, delete users through an audited soft-delete flow, force a subscription plan and expiry, revoke/expire a subscription, stop deployments, and see web deployment/payment state.
+- Every administrative mutation is recorded in audit logs.
+
+## Verification and delivery
+- Update UI navigation, dashboard, subscription page, payment history, API-key documentation, and route manifest so coin purchasing is not presented as the access model.
+- Keep the existing bot deployment code paths functional while adding separate web runtime code.
+- Run schema push, TypeScript diagnostics, typecheck, production build, API health checks, subscription plan/status checks, and web deployment route checks before checkpointing.
+- Save and push a checkpoint only after the working tree is clean and the managed deployment configuration remains intact.

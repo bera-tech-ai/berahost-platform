@@ -1,36 +1,12 @@
 import { Router } from "express";
-import { db, deploymentsTable, botsTable, botLogsTable, usersTable, platformSettingsTable } from "@workspace/db";
+import { db, deploymentsTable, botsTable, botLogsTable, usersTable } from "@workspace/db";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 
 import { requireAuth, requireAny } from "../middlewares/requireAuth";
-import { deductCoins } from "../lib/coins";
 import { startBotProcess, stopBotProcess, getPairingCode, clearPairingCode } from "../lib/botProcess";
 import { hashSessionId } from "../lib/auth";
-import { DEPLOYMENT_COSTS } from "../lib/coins";
 import { serializeBot } from "./bots";
-
-// Read deploy cost for a platform from platform_settings DB; fall back to hardcoded map
-async function getDeployCost(platform: string): Promise<number> {
-  const key = platform === "telegram" ? "deploy_cost_telegram" : "deploy_cost_whatsapp";
-  const [row] = await db
-    .select({ value: platformSettingsTable.value })
-    .from(platformSettingsTable)
-    .where(eq(platformSettingsTable.key, key));
-  if (row?.value) {
-    const n = parseInt(String(row.value), 10);
-    if (!isNaN(n) && n >= 0) return n;
-  }
-  return DEPLOYMENT_COSTS[platform] ?? 30;
-}
-
-// Max simultaneous RUNNING bots per subscription plan
-const PLAN_BOT_LIMITS: Record<string, number> = {
-  free:       1,
-  starter:    3,
-  pro:        10,
-  business:   25,
-  enterprise: 9999,
-};
+import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 
 const router = Router();
 
@@ -93,11 +69,15 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
     return;
   }
 
-  // Check coin balance — cost comes from platform_settings (admin-configurable)
-  const cost = await getDeployCost(bot.platform);
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (dbUser.coins < cost) {
-    res.status(400).json({ error: `Insufficient coins. Deploying this bot costs ${cost} coins.` });
+  if (!dbUser || !isSubscriptionActive(dbUser)) {
+    res.status(402).json({ error: "An active monthly subscription is required before deploying a bot." });
+    return;
+  }
+  const plan = getPlan(dbUser.subscriptionPlan);
+  const existingDeployments = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
+  if (existingDeployments.length >= plan.maxDeployments) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.`, limit: plan.maxDeployments });
     return;
   }
 
@@ -108,9 +88,6 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
     res.status(400).json({ error: `SESSION_ID must start with '${requiredPrefix}' for ${bot.name}` });
     return;
   }
-
-  // Deduct coins
-  await deductCoins(user.id, cost, "deployment", `Deploy ${bot.name}`);
 
   // Hash the session ID
   const sessionIdHash = sessionId ? hashSessionId(sessionId) : null;
@@ -182,10 +159,13 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
     return;
   }
 
-  // Enforce per-plan running bot limit
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  const plan = dbUser?.subscriptionPlan ?? "free";
-  const limit = PLAN_BOT_LIMITS[plan] ?? PLAN_BOT_LIMITS.free;
+  if (!dbUser || !isSubscriptionActive(dbUser)) {
+    res.status(402).json({ error: "Your subscription is inactive. Renew before starting this bot." });
+    return;
+  }
+  const plan = getPlan(dbUser.subscriptionPlan);
+  const limit = plan.maxDeployments;
 
   const [{ runningCount }] = await db
     .select({ runningCount: count() })
@@ -194,9 +174,9 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
 
   if (runningCount >= limit) {
     res.status(403).json({
-      error: `Your ${plan} plan allows ${limit} running bot${limit === 1 ? "" : "s"} at a time. Upgrade your plan to run more bots simultaneously.`,
+      error: `Your ${plan.name} plan allows ${limit} hosted deployments. Upgrade your plan to run more.`,
       limit,
-      currentPlan: plan,
+      currentPlan: plan.id,
     });
     return;
   }
@@ -338,11 +318,15 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     return;
   }
 
-  // Check coin balance for the clone — reads from platform_settings
-  const cost = await getDeployCost(bot.platform);
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  if (dbUser.coins < cost) {
-    res.status(400).json({ error: `Insufficient coins. Cloning costs ${cost} coins.` });
+  if (!dbUser || !isSubscriptionActive(dbUser)) {
+    res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
+    return;
+  }
+  const plan = getPlan(dbUser.subscriptionPlan);
+  const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
+  if (hostedCount.length >= plan.maxDeployments) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
     return;
   }
 
@@ -351,8 +335,6 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     Object.entries((dep.envVars as Record<string, string>) || {}).filter(([k]) => k !== "SESSION_ID")
   );
   const newName = `${dep.customName ?? bot.name} (Copy)`;
-
-  await deductCoins(user.id, cost, "deployment", `Clone deployment #${id}`);
 
   const [clone] = await db.insert(deploymentsTable).values({
     userId:         user.id,
@@ -502,13 +484,16 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
   }
 
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
-  const cost = await getDeployCost(bot.platform);
-  if (dbUser.coins < cost) {
-    res.status(400).json({ error: `Insufficient coins. Cloning costs ${cost} coins.` });
+  if (!dbUser || !isSubscriptionActive(dbUser)) {
+    res.status(402).json({ error: "An active monthly subscription is required before cloning a bot." });
     return;
   }
-
-  await deductCoins(user.id, cost, "deploy", `Clone deployment #${id} (${bot.name})`);
+  const plan = getPlan(dbUser.subscriptionPlan);
+  const hostedCount = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
+  if (hostedCount.length >= plan.maxDeployments) {
+    res.status(403).json({ error: `${plan.name} supports up to ${plan.maxDeployments} hosted deployments.` });
+    return;
+  }
 
   const existingEnv = (dep.envVars as Record<string, string>) || {};
   const clonedEnv = { ...existingEnv };

@@ -2,10 +2,11 @@ import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { setIoEmitter, setPairingCodeEmitter, setUserAlertEmitter, startBotProcess, sendStdin } from "./lib/botProcess";
+import { setIoEmitter, setPairingCodeEmitter, setUserAlertEmitter, startBotProcess, sendStdin, stopBotProcess } from "./lib/botProcess";
+import { stopWebDeployment } from "./lib/webProcess";
 import { initSessionTable } from "./lib/session";
-import { db, deploymentsTable, botsTable, usersTable, platformSettingsTable, notificationsTable } from "@workspace/db";
-import { eq, inArray, count } from "drizzle-orm";
+import { db, deploymentsTable, botsTable, usersTable, platformSettingsTable, notificationsTable, webDeploymentsTable } from "@workspace/db";
+import { eq, inArray, count, lt, ne, and } from "drizzle-orm";
 import { initFromSession, sendWhatsAppMessage, getWASenderStatus, onWASenderConnected } from "./lib/waSender";
 import bcrypt from "bcryptjs";
 import { runScheduledRestarts } from "./routes/scheduled";
@@ -287,7 +288,23 @@ async function main() {
       });
     }, 60 * 1000);
     logger.info("Scheduled restart cron started (checks every 60s)");
+    const reconcile = () => reconcileExpiredSubscriptions().catch((err) => logger.error({ err }, "Subscription expiry reconciliation failed"));
+    reconcile();
+    setInterval(reconcile, 60 * 1000);
+    logger.info("Subscription expiry reconciler started (checks every 60s)");
   });
+}
+
+async function reconcileExpiredSubscriptions() {
+  const expired = await db.select({ id: usersTable.id }).from(usersTable).where(and(lt(usersTable.subscriptionExpiresAt, new Date()), ne(usersTable.subscriptionPlan, "free")));
+  for (const user of expired) {
+    const bots = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, user.id));
+    for (const bot of bots) await stopBotProcess(bot.id).catch(() => {});
+    const webs = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id));
+    for (const web of webs) await stopWebDeployment(web.id).catch(() => {});
+    await db.update(usersTable).set({ subscriptionPlan: "free" }).where(eq(usersTable.id, user.id));
+    logger.info({ userId: user.id }, "Expired subscription reconciled; hosted deployments retained and stopped");
+  }
 }
 
 /**
@@ -302,6 +319,7 @@ async function restoreRunningBots() {
   const runningDeps = await db
     .select({
       id: deploymentsTable.id,
+      userId: deploymentsTable.userId,
       envVars: deploymentsTable.envVars,
       botId: deploymentsTable.botId,
       restartCount: deploymentsTable.restartCount,
@@ -318,6 +336,11 @@ async function restoreRunningBots() {
 
   for (const dep of runningDeps) {
     try {
+      const [owner] = await db.select({ subscriptionPlan: usersTable.subscriptionPlan, subscriptionExpiresAt: usersTable.subscriptionExpiresAt, isBanned: usersTable.isBanned }).from(usersTable).where(eq(usersTable.id, dep.userId));
+      if (!owner || owner.isBanned || !owner.subscriptionExpiresAt || owner.subscriptionExpiresAt <= new Date() || owner.subscriptionPlan === "free") {
+        await db.update(deploymentsTable).set({ status: "stopped", pid: null, updatedAt: new Date() }).where(eq(deploymentsTable.id, dep.id));
+        continue;
+      }
       // Reset restart counter so the bot gets full auto-restart budget again
       await db
         .update(deploymentsTable)

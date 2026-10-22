@@ -13,28 +13,22 @@ import { useQueryClient } from "@tanstack/react-query";
 
 const PLAN_DETAILS = [
   {
-    id: "free", name: "Free", kes: 0, coinsPerMonth: 10, maxBots: 1,
-    features: ["1 Bot Instance", "10 Coins (one-time)", "Community Support", "Standard Network"],
-    excluded: ["Priority Support", "Bot Cloning", "Webhooks & Metrics"]
+    id: "free", name: "No active plan", kes: 0, maxBots: 0,
+    features: ["Renew to deploy", "Stored deployments remain visible"], excluded: []
   },
   {
-    id: "starter", name: "Starter", kes: 199, coinsPerMonth: 0, maxBots: 3,
-    features: ["3 Bot Instances", "Priority Support", "Log Export", "Webhook Notifications"],
+    id: "starter", name: "Starter", kes: 200, maxBots: 5,
+    features: ["5 bots or web applications", "Hosted URL", "Env configuration scan"],
     excluded: []
   },
   {
-    id: "pro", name: "Pro", kes: 499, coinsPerMonth: 0, maxBots: 10,
-    features: ["10 Bot Instances", "Bot Cloning", "Live Metrics", "Webhooks", "API Access"],
+    id: "silver", name: "Silver", kes: 500, maxBots: 13,
+    features: ["13 bots or web applications", "Priority runtime", "GitHub web deploys"],
     excluded: []
   },
   {
-    id: "business", name: "Business", kes: 999, coinsPerMonth: 0, maxBots: 25,
-    features: ["25 Bot Instances", "All Pro features", "Custom Domains", "Priority Tier", "Dedicated Support"],
-    excluded: []
-  },
-  {
-    id: "enterprise", name: "Enterprise", kes: 2999, coinsPerMonth: 0, maxBots: 9999,
-    features: ["Unlimited Bots", "Dedicated Infrastructure", "SLA Guarantee", "White-label option", "Everything"],
+    id: "gold", name: "Gold", kes: 800, maxBots: 30,
+    features: ["30 bots or web applications", "Custom domain requests", "Priority support"],
     excluded: []
   },
 ];
@@ -100,10 +94,10 @@ export default function SubscriptionsPage() {
         </motion.div>
       )}
 
-      <motion.div variants={item} className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
+      <motion.div variants={item} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {PLAN_DETAILS.map((plan) => {
           const isCurrent = currentPlan === plan.id;
-          const isPopular = plan.id === "pro";
+          const isPopular = plan.id === "silver";
           const isFree = plan.id === "free";
 
           return (
@@ -143,7 +137,7 @@ export default function SubscriptionsPage() {
                   )}
                 </div>
                 <CardDescription className="font-mono text-[10px] mt-1 text-primary/70">
-                  {plan.maxBots === 9999 ? "Unlimited" : plan.maxBots} bot{plan.maxBots !== 1 ? "s" : ""}
+                  {plan.maxBots} hosted bot/web deployment{plan.maxBots !== 1 ? "s" : ""}
                 </CardDescription>
               </CardHeader>
 

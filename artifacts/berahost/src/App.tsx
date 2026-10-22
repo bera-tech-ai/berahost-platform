@@ -14,9 +14,9 @@ import BotsMarketplace from "@/pages/bots";
 import BotDetails from "@/pages/bots/[id]";
 import Deployments from "@/pages/deployments";
 import DeploymentConsole from "@/pages/deployments/[id]";
-import CoinsPage from "@/pages/coins";
 import PaymentsPage from "@/pages/payments";
 import SubscriptionsPage from "@/pages/subscriptions";
+import WebDeploymentsPage from "@/pages/web-deployments";
 import NotificationsPage from "@/pages/notifications";
 import SupportTickets from "@/pages/support";
 import TicketDetail from "@/pages/support/[id]";
@@ -73,7 +73,7 @@ function Router() {
       <Route path="/bots/:id"><ProtectedRoute component={BotDetails} /></Route>
       <Route path="/deployments"><ProtectedRoute component={Deployments} /></Route>
       <Route path="/deployments/:id"><ProtectedRoute component={DeploymentConsole} /></Route>
-      <Route path="/coins"><ProtectedRoute component={CoinsPage} /></Route>
+      <Route path="/web-deployments"><ProtectedRoute component={WebDeploymentsPage} /></Route>
       <Route path="/payments"><ProtectedRoute component={PaymentsPage} /></Route>
       <Route path="/subscriptions"><ProtectedRoute component={SubscriptionsPage} /></Route>
       <Route path="/notifications"><ProtectedRoute component={NotificationsPage} /></Route>

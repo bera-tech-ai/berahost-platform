@@ -6,7 +6,6 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
-  Coins,
   CreditCard,
   Github,
   Gift,
@@ -16,6 +15,7 @@ import {
   LogOut,
   Menu,
   Server,
+  Globe2,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -37,13 +37,13 @@ const workspaceLinks = [
   { name: "Deployments", href: "/deployments", icon: Server },
   { name: "Teams", href: "/teams", icon: Users },
   { name: "GitHub deploy", href: "/github", icon: Github },
+  { name: "Web hosting", href: "/web-deployments", icon: Globe2 },
 ];
 const growthLinks = [
   { name: "Leaderboard", href: "/leaderboard", icon: Trophy },
   { name: "Referrals", href: "/referrals", icon: Gift },
 ];
 const accountLinks = [
-  { name: "Wallet", href: "/coins", icon: Coins },
   { name: "Payments", href: "/payments", icon: CreditCard },
   { name: "Subscription", href: "/subscriptions", icon: ShieldCheck },
 ];
@@ -115,7 +115,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <Avatar className="h-9 w-9 border border-primary/30"><AvatarFallback className="bg-primary/10 text-sm font-semibold text-primary">{initials}</AvatarFallback></Avatar>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium" data-testid="text-account-email">{user?.displayName || user?.email || "Loading account"}</p>
-          <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground"><Coins className="h-3 w-3 text-secondary" />{user?.coins || 0} coins</p>
+          <p className="mt-0.5 text-xs uppercase tracking-wide text-muted-foreground">{user?.subscriptionPlan || "no plan"} plan</p>
         </div>
       </div>
       <Button variant="ghost" data-testid="button-logout" className="mt-2 w-full justify-start text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={() => logoutMutation.mutate()} disabled={logoutMutation.isPending}>

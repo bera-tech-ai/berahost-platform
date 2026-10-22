@@ -223,7 +223,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     return;
   }
 
-  if (user.isBanned) {
+  if (user.isBanned || user.deletedAt) {
     res.status(401).json({ error: "Account banned. Contact support." });
     return;
   }

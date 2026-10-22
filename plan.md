@@ -1,16 +1,18 @@
-# BERAHOST Live Migration Plan
+# BERAHOST Subscription and Web Hosting Plan
 
 ## Scope
-Migrate the existing BERAHOST repository into a managed live web project, preserve its full-stack behavior, make the frontend and API runnable in Preview, and prepare the current source for subsequent user-requested updates.
+Replace coin-based access with monthly Starter, Silver, and Gold subscriptions for bot and web hosting while preserving the existing bot deployment engine. Add GitHub-based static/Node web deployments, unique hosted URLs, optional paid custom-domain requests, automatic suspension at subscription expiry, and audited admin controls.
 
 ## Implementation approach
-- Preserve the existing pnpm workspace structure: React/Vite frontend in `artifacts/berahost`, Express/Socket.IO API in `artifacts/api-server`, and Drizzle/PostgreSQL code in `lib/db`.
-- Run the API and frontend as separate development listeners during Preview, with the frontend proxying `/api` and Socket.IO traffic to the API.
-- Use the managed project server and database capabilities for live deployment; protected runtime values remain environment secrets.
-- Keep the source checkout at `/home/ubuntu/berahost-source` as a recovery copy while the managed project uses `/home/ubuntu/berahost`.
+- Keep the existing bot process, WhatsApp session backup, Socket.IO logs, and bot template/env scanning paths intact; remove coins from deployment eligibility and user-facing navigation.
+- Create one canonical subscription catalog: Starter KES 200 / 5 bots, Silver KES 500 / 13 bots, Gold KES 800 / 30 bots, each for 30 days. PayHero callbacks extend expiry from the later of now or current expiry.
+- Centralize entitlement checks for create/start/restore/restart and run an expiry reconciler that stops processes but retains deployment records and web project metadata for later renewal.
+- Add a separate `web_deployments` model and runtime service. Clone a validated public GitHub URL, scan package/env configuration, run a build when configured, serve static output or proxy a Node process, and expose a unique `/web/<slug>` URL. Do not route web projects through the bot deployment tables.
+- Add custom-domain orders at KES 134 through PayHero, with verification-token and paid/active states. A domain becomes routable when paid and verified; DNS/TLS remains platform/provider controlled.
+- Add audited admin delete-user, ban/unban, force-plan, and subscription expiry controls. User deletion is soft deletion so payment/audit history remains consistent.
+- Use server-returned plan data in the UI. Replace wallet/coin purchase surfaces with subscription status, plan cards, payment history, and a web deployment console.
 
 ## Design
-
 ### Candidate styles
 - **Bera Signal Console** — probability 0.06: dark operator-console surfaces with electric lime accents and dense status cues.
 - **Warm SaaS Command Center** — probability 0.04: soft panels, amber highlights, and an approachable operational hierarchy.
@@ -19,20 +21,24 @@ Migrate the existing BERAHOST repository into a managed live web project, preser
 ### Chosen direction: Bera Signal Console
 - **Design Movement:** cyber-operations dashboard fused with contemporary SaaS product polish.
 - **Core Principles:** high signal-to-noise; visible system state; fast scan paths; confident but readable controls.
-- **Color Philosophy:** near-black surfaces make logs and status colors legible; Bera green signals active infrastructure; warm amber marks attention without turning every state into an alarm.
-- **Layout Paradigm:** persistent left command rail with asymmetrical operational panels and full-width activity bands rather than a centered marketing grid.
+- **Color Philosophy:** near-black surfaces make logs and status colors legible; Bera green signals active infrastructure; warm amber marks billing attention.
+- **Layout Paradigm:** persistent command rail with asymmetrical operational panels and full-width activity bands rather than a centered marketing grid.
 - **Signature Elements:** lime status pips, terminal-inspired data rows, and rounded glass panels with thin luminous borders.
-- **Interaction Philosophy:** every action should expose state immediately through inline feedback, optimistic transitions, or a clear pending state.
-- **Animation:** short, purposeful transitions for panel entry and live-state changes; avoid decorative loops that compete with logs.
-- **Typography System:** Inter for UI and navigation; JetBrains Mono for logs, IDs, timestamps, and technical values.
-- **Brand Essence:** a sharp, self-hosted command center for running WhatsApp bots with confidence — operational, transparent, empowering.
-- **Brand Voice:** direct, technical, and encouraging. Example lines: “Your bot is live. Watch the signal.” and “Pair once, operate from anywhere.”
-- **Wordmark & Logo:** retain the existing BERA mark and pair it with compact uppercase wordmark treatment.
-- **Signature Brand Color:** electric Bera green, used as the recognizable action and health signal.
+- **Interaction Philosophy:** every action exposes pending, active, suspended, and expired state immediately.
+- **Animation:** short state transitions only; no decorative loops competing with logs or payment feedback.
+- **Typography System:** Inter for UI; JetBrains Mono for IDs, domains, timestamps, and deployment logs.
+- **Brand Essence:** a sharp hosting command center for bots and web apps — operational, transparent, empowering.
+- **Brand Voice:** direct, technical, and encouraging. “Your deployment is live.” “Renew before the runtime sleeps.”
+- **Wordmark & Logo:** retain the existing BERA mark with compact uppercase wordmark treatment.
+- **Signature Brand Color:** electric Bera green as the action and health signal.
 
 ## Project structure
-- `artifacts/berahost`: public React dashboard and landing pages.
-- `artifacts/api-server`: Express routes, Socket.IO events, sessions, bot process control, and startup seeding.
-- `lib/db`: Drizzle schema and database client.
-- `lib/api-spec`, `lib/api-zod`, `lib/api-client-react`: API contract and generated client layers.
-- `public/manus-routes.json`: managed route manifest for the Preview and publishing system.
+- `artifacts/api-server/src/lib/subscriptions.ts`: canonical plans and entitlement helpers.
+- `artifacts/api-server/src/lib/webProcess.ts`: isolated web clone/build/run/stop and request proxy helpers.
+- `artifacts/api-server/src/routes/payments.ts`: PayHero subscription and domain payment flows.
+- `artifacts/api-server/src/routes/webDeployments.ts`: web project CRUD, env scan, lifecycle, and domain orders.
+- `artifacts/api-server/src/routes/admin.ts`: audited user and subscription administration.
+- `lib/db/src/schema`: web deployment and domain order tables; existing bot tables remain compatible.
+- `artifacts/berahost/src/pages/subscriptions.tsx`: canonical plan purchase/status UI.
+- `artifacts/berahost/src/pages/web-deployments.tsx`: GitHub web deployment workflow and hosted URLs.
+- `artifacts/berahost/public/manus-routes.json`: synchronized route manifest.

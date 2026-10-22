@@ -1,6 +1,6 @@
 import { Router } from "express";
 import os from "os";
-import { db, usersTable, deploymentsTable, botsTable, coinTransactionsTable, paymentTransactionsTable, vouchersTable, auditLogsTable, platformSettingsTable, supportTicketsTable, ticketMessagesTable, broadcastsTable, notificationsTable } from "@workspace/db";
+import { db, usersTable, deploymentsTable, botsTable, coinTransactionsTable, paymentTransactionsTable, vouchersTable, auditLogsTable, platformSettingsTable, supportTicketsTable, ticketMessagesTable, broadcastsTable, notificationsTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, count, sum, sql, ilike, or, and } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/requireAdmin";
 import { logger } from "../lib/logger";
@@ -11,6 +11,7 @@ import { serializeUser } from "../lib/auth";
 import { stopBotProcess, startBotProcess, availableSlots, runningProcesses } from "../lib/botProcess";
 import { addCoins } from "../lib/coins";
 import { hashSessionId } from "../lib/auth";
+import { stopWebDeployment } from "../lib/webProcess";
 
 const router = Router();
 
@@ -90,6 +91,8 @@ router.post("/admin/users/:id/ban", requireAdmin, async (req, res): Promise<void
     for (const dep of deps) {
       await stopBotProcess(dep.id).catch(() => {});
     }
+    const webDeps = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, id));
+    for (const dep of webDeps) await stopWebDeployment(dep.id).catch(() => {});
   }
 
   await db.insert(auditLogsTable).values({
@@ -129,6 +132,21 @@ router.post("/admin/users/:id/coins", requireAdmin, async (req, res): Promise<vo
   });
 
   res.json({ message: `${amount > 0 ? "Added" : "Deducted"} ${Math.abs(amount)} coins` });
+});
+
+router.delete("/admin/users/:id", requireAdmin, async (req, res): Promise<void> => {
+  const adminUser = (req as any).user;
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (id === adminUser.id) { res.status(400).json({ error: "You cannot delete your own admin account." }); return; }
+  const [target] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.id, id));
+  if (!target) { res.status(404).json({ error: "User not found" }); return; }
+  const deps = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, id));
+  for (const dep of deps) await stopBotProcess(dep.id).catch(() => {});
+  const webDeps = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, id));
+  for (const dep of webDeps) await stopWebDeployment(dep.id).catch(() => {});
+  await db.update(usersTable).set({ isBanned: true, deletedAt: new Date(), subscriptionPlan: "free", subscriptionExpiresAt: null }).where(eq(usersTable.id, id));
+  await db.insert(auditLogsTable).values({ adminId: adminUser.id, action: "delete_user", details: { targetUserId: id }, ipAddress: req.ip || null });
+  res.json({ message: "User deleted and hosting stopped. Historical records were retained." });
 });
 
 router.post("/admin/users/:id/override-session", requireAdmin, async (req, res): Promise<void> => {
@@ -883,7 +901,7 @@ router.post("/admin/users/:id/plan", requireAdmin, async (req, res): Promise<voi
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   const { plan, expiresAt, reason } = req.body;
 
-  const validPlans = ["free", "starter", "pro", "business", "enterprise"];
+  const validPlans = ["free", "starter", "silver", "gold"];
   if (!plan || !validPlans.includes(plan)) {
     res.status(400).json({ error: `Plan must be one of: ${validPlans.join(", ")}` });
     return;
@@ -893,6 +911,13 @@ router.post("/admin/users/:id/plan", requireAdmin, async (req, res): Promise<voi
     subscriptionPlan:      plan,
     subscriptionExpiresAt: expiresAt ? new Date(expiresAt) : null,
   }).where(eq(usersTable.id, id));
+
+  if (plan === "free" || (expiresAt && new Date(expiresAt) <= new Date())) {
+    const deps = await db.select({ id: deploymentsTable.id }).from(deploymentsTable).where(eq(deploymentsTable.userId, id));
+    for (const dep of deps) await stopBotProcess(dep.id).catch(() => {});
+    const webDeps = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, id));
+    for (const dep of webDeps) await stopWebDeployment(dep.id).catch(() => {});
+  }
 
   await db.insert(auditLogsTable).values({
     adminId: adminUser.id,

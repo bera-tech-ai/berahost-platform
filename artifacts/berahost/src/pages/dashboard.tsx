@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import { 
   Server, 
   Bot, 
-  Coins, 
   Activity, 
   AlertTriangle,
   ArrowRight
@@ -11,8 +10,7 @@ import {
 import { 
   useGetMe, 
   useListDeployments, 
-  useListBots,
-  useGetCoinBalance
+  useListBots
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,7 +21,6 @@ export default function Dashboard() {
   const { data: user, isLoading: userLoading } = useGetMe();
   const { data: deployments, isLoading: deploymentsLoading } = useListDeployments();
   const { data: bots, isLoading: botsLoading } = useListBots();
-  const { data: coinBalance, isLoading: coinsLoading } = useGetCoinBalance();
 
   const activeDeployments = deployments?.filter(d => d.status === 'running') || [];
   const stoppedDeployments = deployments?.filter(d => d.status === 'stopped') || [];
@@ -44,7 +41,7 @@ export default function Dashboard() {
     show: { opacity: 1, y: 0 }
   };
 
-  if (userLoading || deploymentsLoading || botsLoading || coinsLoading) {
+  if (userLoading || deploymentsLoading || botsLoading) {
     return (
       <div className="space-y-6">
         <div>
@@ -110,13 +107,13 @@ export default function Dashboard() {
           <Card className="border-secondary/20 bg-card/50 backdrop-blur-xl relative overflow-hidden group">
             <div className="absolute inset-0 bg-gradient-to-br from-secondary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-               <CardTitle className="text-sm font-medium text-muted-foreground">Available coins</CardTitle>
-              <Coins className="h-4 w-4 text-secondary" />
+               <CardTitle className="text-sm font-medium text-muted-foreground">Web hosting</CardTitle>
+              <Server className="h-4 w-4 text-secondary" />
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-black text-secondary">{coinBalance?.coins || 0}</div>
+              <div className="text-3xl font-black text-secondary">Ready</div>
               <p className="text-xs text-muted-foreground font-mono mt-1">
-                 <Link href="/coins" data-testid="link-dashboard-wallet" className="text-secondary hover:underline cursor-pointer">Manage wallet →</Link>
+                 <Link href="/web-deployments" data-testid="link-dashboard-web-hosting" className="text-secondary hover:underline cursor-pointer">Deploy a website →</Link>
               </p>
             </CardContent>
           </Card>
@@ -229,10 +226,10 @@ export default function Dashboard() {
                      <span className="text-sm">Marketplace</span>
                   </Button>
                 </Link>
-                <Link href="/coins">
+                <Link href="/web-deployments">
                   <Button variant="outline" className="w-full h-auto py-4 flex flex-col gap-2 border-border/50 hover:border-secondary/50 hover:bg-secondary/5 transition-all">
-                    <Coins className="h-6 w-6 text-secondary" />
-                     <span className="text-sm">Buy coins</span>
+                    <Server className="h-6 w-6 text-secondary" />
+                     <span className="text-sm">Deploy web</span>
                   </Button>
                 </Link>
                 <Link href="/support">

@@ -19,6 +19,7 @@ import scheduledRouter from "./scheduled";
 import logsearchRouter from "./logsearch";
 import referralsRouter from "./referrals";
 import guideRouter from "./guide";
+import webDeploymentsRouter from "./webDeployments";
 
 const router: IRouter = Router();
 
@@ -26,6 +27,7 @@ router.use(healthRouter);
 router.use(authRouter);
 router.use(botsRouter);
 router.use(deploymentsRouter);
+router.use(webDeploymentsRouter);
 router.use(coinsRouter);
 router.use(paymentsRouter);
 router.use(subscriptionsRouter);
