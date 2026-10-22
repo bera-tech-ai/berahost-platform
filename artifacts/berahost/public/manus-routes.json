@@ -105,10 +105,6 @@
       "title": "Admin Deployments"
     },
     {
-      "path": "/admin/vouchers",
-      "title": "Admin Vouchers"
-    },
-    {
       "path": "/admin/support",
       "title": "Admin Support"
     },

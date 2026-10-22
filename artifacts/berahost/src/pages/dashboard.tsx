@@ -1,254 +1,236 @@
+import { useMemo } from "react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
-import { 
-  Server, 
-  Bot, 
-  Activity, 
-  AlertTriangle,
-  ArrowRight
+import { useQuery } from "@tanstack/react-query";
+import {
+  Activity,
+  ArrowUpRight,
+  Bot,
+  CheckCircle2,
+  ChevronRight,
+  CircleAlert,
+  Cloud,
+  ExternalLink,
+  Globe2,
+  HardDrive,
+  LayoutDashboard,
+  Loader2,
+  Plus,
+  Server,
+  Sparkles,
+  Terminal,
+  TriangleAlert,
+  Zap,
 } from "lucide-react";
-import { 
-  useGetMe, 
-  useListDeployments, 
-  useListBots
+import {
+  useGetMe,
+  useListBots,
+  useListDeployments,
 } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+
+const BASE = import.meta.env.BASE_URL;
+
+type WebDeployment = {
+  id: number;
+  slug: string;
+  customName?: string | null;
+  repoUrl: string;
+  branch: string;
+  status: string;
+  publicUrl: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type Project = {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
+  href: string;
+  url?: string;
+  createdAt?: string;
+  kind: "bot" | "web";
+};
+
+function statusTone(status: string) {
+  if (status === "running") return "border-accent/30 bg-accent/10 text-accent";
+  if (["queued", "building", "deploying", "starting"].includes(status)) return "border-primary/30 bg-primary/10 text-primary";
+  if (["failed", "crashed"].includes(status)) return "border-destructive/30 bg-destructive/10 text-destructive";
+  return "border-border bg-muted/30 text-muted-foreground";
+}
+
+function statusDot(status: string) {
+  if (status === "running") return "bg-accent shadow-[0_0_12px_hsl(var(--accent))]";
+  if (["queued", "building", "deploying", "starting"].includes(status)) return "bg-primary animate-pulse";
+  if (["failed", "crashed"].includes(status)) return "bg-destructive shadow-[0_0_12px_hsl(var(--destructive))]";
+  return "bg-muted-foreground/60";
+}
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function relativeTime(value?: string) {
+  if (!value) return "Recently";
+  const minutes = Math.max(1, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function SignalChart({ running, building, failed }: { running: number; building: number; failed: number }) {
+  const points = [
+    38 + running * 5,
+    48 + building * 5,
+    30 + running * 4,
+    52 + failed * 8,
+    34 + running * 5,
+    44 + building * 7,
+    27 + running * 4,
+    39 + failed * 7,
+  ].map((point) => Math.min(82, point));
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${index * 43 + 10} ${point}`).join(" ");
+  const area = `${path} L 311 104 L 10 104 Z`;
+
+  return (
+    <svg viewBox="0 0 321 112" className="h-28 w-full overflow-visible" role="img" aria-label="Current project activity signal">
+      <defs>
+        <linearGradient id="signal-fill" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stopColor="hsl(var(--primary))" stopOpacity=".28" />
+          <stop offset="1" stopColor="hsl(var(--primary))" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {[22, 50, 78, 104].map((y) => <line key={y} x1="0" x2="321" y1={y} y2={y} stroke="hsl(var(--border))" strokeOpacity=".45" strokeDasharray="3 5" />)}
+      <path d={area} fill="url(#signal-fill)" />
+      <path d={path} fill="none" stroke="hsl(var(--primary))" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
+      <path d="M 10 91 C 48 82, 81 90, 123 83 S 208 92, 311 78" fill="none" stroke="hsl(var(--destructive))" strokeLinecap="round" strokeWidth="1.7" strokeOpacity=".75" />
+    </svg>
+  );
+}
 
 export default function Dashboard() {
   const { data: user, isLoading: userLoading } = useGetMe();
   const { data: deployments, isLoading: deploymentsLoading } = useListDeployments();
   const { data: bots, isLoading: botsLoading } = useListBots();
+  const { data: webDeployments = [], isLoading: webLoading } = useQuery<WebDeployment[]>({
+    queryKey: ["dashboard-web-deployments"],
+    queryFn: async () => {
+      const response = await fetch(`${BASE}api/web-deployments`, { credentials: "include" });
+      if (!response.ok) throw new Error("Unable to load web deployments");
+      return response.json();
+    },
+    refetchInterval: 15000,
+  });
 
-  const activeDeployments = deployments?.filter(d => d.status === 'running') || [];
-  const stoppedDeployments = deployments?.filter(d => d.status === 'stopped') || [];
-  const crashedDeployments = deployments?.filter(d => d.status === 'crashed') || [];
+  const projects = useMemo<Project[]>(() => {
+    const botProjects = (deployments ?? []).map((deployment: any) => ({
+      id: `bot-${deployment.id}`,
+      name: deployment.customName || deployment.bot?.name || `Bot #${deployment.botId}`,
+      source: deployment.bot?.name || `Bot deployment ${deployment.id}`,
+      status: deployment.status,
+      href: `/deployments/${deployment.id}`,
+      createdAt: deployment.createdAt,
+      kind: "bot" as const,
+    }));
+    const webProjects = webDeployments.map((deployment) => ({
+      id: `web-${deployment.id}`,
+      name: deployment.customName || deployment.slug,
+      source: `${deployment.repoUrl.replace("https://github.com/", "")} · ${deployment.branch}`,
+      status: deployment.status,
+      href: "/web-deployments",
+      url: deployment.publicUrl,
+      createdAt: deployment.createdAt,
+      kind: "web" as const,
+    }));
+    return [...botProjects, ...webProjects].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  }, [deployments, webDeployments]);
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1
-      }
-    }
-  };
+  const running = projects.filter((project) => project.status === "running").length;
+  const building = projects.filter((project) => ["queued", "building", "deploying", "starting"].includes(project.status)).length;
+  const failed = projects.filter((project) => ["failed", "crashed"].includes(project.status)).length;
+  const total = projects.length;
+  const healthyRatio = total ? Math.round(((total - failed) / total) * 100) : 100;
+  const isLoading = userLoading || deploymentsLoading || botsLoading || webLoading;
 
-  const item = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0 }
-  };
-
-  if (userLoading || deploymentsLoading || botsLoading) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
-        <div>
-          <Skeleton className="h-10 w-64 mb-2" />
-          <Skeleton className="h-5 w-96" />
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map(i => (
-            <Skeleton key={i} className="h-32 w-full" />
-          ))}
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Skeleton className="h-64 w-full" />
-          <Skeleton className="h-64 w-full" />
-        </div>
+        <Skeleton className="h-12 w-72" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-28" />)}</div>
+        <div className="grid gap-5 xl:grid-cols-[1fr_400px]"><Skeleton className="h-[430px]" /><Skeleton className="h-[430px]" /></div>
       </div>
     );
   }
 
   return (
-    <motion.div 
-      className="space-y-6"
-      variants={container}
-      initial="hidden"
-      animate="show"
-    >
-      <motion.div variants={item} className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
+    <motion.div className="space-y-6 pb-4" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
-           <h1 className="page-title">
-             Workspace overview
-          </h1>
-           <p className="mt-2 text-sm text-muted-foreground">
-             Welcome back, <span className="text-foreground">{user?.displayName || user?.email}</span>. Here is the current picture of your bot operations.
-          </p>
+          <p className="eyebrow">Workspace command center</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{greeting()}, {user?.displayName || "Bera"} <span aria-hidden>👋</span></h1>
+          <p className="mt-2 text-sm text-muted-foreground">Here&apos;s what&apos;s happening with your hosted applications.</p>
         </div>
         <div className="flex gap-2">
-          <Link href="/bots">
-             <Button data-testid="button-dashboard-new-deployment" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-               <Bot className="mr-2 h-4 w-4" /> New deployment
-            </Button>
-          </Link>
+          <Link href="/bots"><Button className="bg-primary text-primary-foreground shadow-[0_0_24px_hsl(var(--primary)/.18)] hover:bg-primary/90"><Plus className="mr-2 h-4 w-4" /> New deployment</Button></Link>
+          <Link href="/web-deployments"><Button variant="outline" className="border-primary/30 text-primary hover:bg-primary/10"><Globe2 className="mr-2 h-4 w-4" /> Web hosting</Button></Link>
         </div>
-      </motion.div>
+      </section>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <motion.div variants={item}>
-          <Card className="border-primary/20 bg-card/50 backdrop-blur-xl relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-               <CardTitle className="text-sm font-medium text-muted-foreground">Running deployments</CardTitle>
-              <Server className="h-4 w-4 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-black text-primary">{activeDeployments.length}</div>
-              <p className="text-xs text-muted-foreground font-mono mt-1">
-                 {deployments?.length || 0} total deployment{deployments?.length === 1 ? "" : "s"}
-              </p>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Total projects", value: total, detail: `${bots?.length || 0} bot${bots?.length === 1 ? "" : "s"} · ${webDeployments.length} web`, icon: Cloud, tone: "text-primary", ring: "border-primary/25" },
+          { label: "Running", value: running, detail: running ? "Live right now" : "Nothing running", icon: CheckCircle2, tone: "text-accent", ring: "border-accent/25" },
+          { label: "Building", value: building, detail: building ? "Deployment activity" : "Queue is clear", icon: Loader2, tone: "text-chart-5", ring: "border-chart-5/25" },
+          { label: "Failed", value: failed, detail: failed ? "Needs attention" : "All clear", icon: failed ? CircleAlert : Zap, tone: failed ? "text-destructive" : "text-secondary", ring: failed ? "border-destructive/30" : "border-secondary/25" },
+        ].map(({ label, value, detail, icon: Icon, tone, ring }) => (
+          <Card key={label} className={`soft-card ${ring} overflow-hidden`}>
+            <CardContent className="relative p-4">
+              <div className="absolute right-4 top-4 rounded-lg bg-background/60 p-2"><Icon className={`h-4 w-4 ${tone}`} /></div>
+              <p className="text-xs font-medium text-muted-foreground">{label}</p>
+              <p className={`mt-3 text-3xl font-semibold tracking-tight ${tone}`}>{value}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{detail}</p>
             </CardContent>
           </Card>
-        </motion.div>
+        ))}
+      </section>
 
-        <motion.div variants={item}>
-          <Card className="border-secondary/20 bg-card/50 backdrop-blur-xl relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-secondary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-               <CardTitle className="text-sm font-medium text-muted-foreground">Web hosting</CardTitle>
-              <Server className="h-4 w-4 text-secondary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-black text-secondary">Ready</div>
-              <p className="text-xs text-muted-foreground font-mono mt-1">
-                 <Link href="/web-deployments" data-testid="link-dashboard-web-hosting" className="text-secondary hover:underline cursor-pointer">Deploy a website →</Link>
-              </p>
-            </CardContent>
-          </Card>
-        </motion.div>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <Card className="soft-card overflow-hidden">
+          <CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4">
+            <div><CardTitle className="flex items-center gap-2 text-base"><Activity className="h-4 w-4 text-primary" /> System overview</CardTitle><p className="mt-1 text-xs text-muted-foreground">A live signal from your current bot and web runtimes.</p></div>
+            <Badge variant="outline" className={failed ? "border-destructive/30 text-destructive" : "border-accent/30 text-accent"}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${failed ? "bg-destructive" : "bg-accent shadow-[0_0_8px_hsl(var(--accent))]"}`} />{failed ? "Attention required" : "All systems operational"}</Badge>
+          </CardHeader>
+          <CardContent className="grid gap-6 p-5 lg:grid-cols-[1fr_210px]">
+            <div><SignalChart running={running} building={building} failed={failed} /><div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-primary" />Active signal</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-destructive" />Error signal</span></div></div>
+            <div className="rounded-xl border border-border/60 bg-background/35 p-4"><div className="mb-4 flex items-center justify-between"><span className="text-xs text-muted-foreground">Project health</span><span className="font-mono text-xl font-semibold text-primary">{healthyRatio}%</span></div><div className="space-y-3 text-xs"><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-accent">{running}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-accent" style={{ width: `${total ? (running / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Building</span><span className="font-mono text-primary">{building}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-primary" style={{ width: `${total ? (building / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Failed</span><span className="font-mono text-destructive">{failed}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-destructive" style={{ width: `${total ? (failed / total) * 100 : 0}%` }} /></div></div></div></div>
+          </CardContent>
+        </Card>
 
-        <motion.div variants={item}>
-          <Card className="border-accent/20 bg-card/50 backdrop-blur-xl relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-accent/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-               <CardTitle className="text-sm font-medium text-muted-foreground">Runtime status</CardTitle>
-              <Activity className="h-4 w-4 text-accent" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-black text-accent">
-                 {crashedDeployments.length > 0 ? 'Needs attention' : 'All clear'}
-              </div>
-              <p className="text-xs text-muted-foreground font-mono mt-1">
-                {crashedDeployments.length > 0 
-                   ? <span className="text-destructive">{crashedDeployments.length} deployment{crashedDeployments.length === 1 ? "" : "s"} need attention</span>
-                   : 'No deployment issues detected'}
-              </p>
-            </CardContent>
-          </Card>
-        </motion.div>
+        <Card className="soft-card overflow-hidden">
+          <CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4"><div><CardTitle className="text-base">Workspace health</CardTitle><p className="mt-1 text-xs text-muted-foreground">Entitlement and runtime readiness.</p></div><div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-primary/25 border-t-primary text-sm font-semibold text-primary">{healthyRatio}%</div></CardHeader>
+          <CardContent className="space-y-4 p-5"><div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent/5 p-3"><CheckCircle2 className="h-5 w-5 shrink-0 text-accent" /><div><p className="text-sm font-medium">API and workspace online</p><p className="text-xs text-muted-foreground">Live status is available from each deployment.</p></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-border/60 bg-background/35 p-3"><HardDrive className="h-4 w-4 text-secondary" /><p className="mt-2 text-lg font-semibold">{user?.subscriptionPlan || "free"}</p><p className="text-[11px] text-muted-foreground">Current plan</p></div><div className="rounded-xl border border-border/60 bg-background/35 p-3"><Server className="h-4 w-4 text-primary" /><p className="mt-2 text-lg font-semibold">{running}/{total || 0}</p><p className="text-[11px] text-muted-foreground">Live projects</p></div></div><Link href="/subscriptions" className="flex items-center justify-between text-xs text-primary hover:underline">Review subscription <ArrowUpRight className="h-3.5 w-3.5" /></Link></CardContent>
+        </Card>
+      </section>
 
-        <motion.div variants={item}>
-          <Card className="border-muted-foreground/20 bg-card/50 backdrop-blur-xl relative overflow-hidden group">
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-               <CardTitle className="text-sm font-medium text-muted-foreground">Current plan</CardTitle>
-              <Badge variant="outline" className="border-primary/50 text-primary font-mono uppercase">{user?.subscriptionPlan}</Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-lg font-bold mt-2">
-                 {user?.subscriptionPlan === 'free' ? 'Free workspace' : 'Paid workspace'}
-              </div>
-              <p className="text-xs text-muted-foreground font-mono mt-1">
-                 <Link href="/subscriptions" data-testid="link-dashboard-subscription" className="text-primary hover:underline cursor-pointer">View plan options →</Link>
-              </p>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <Card className="soft-card overflow-hidden">
+          <CardHeader className="flex flex-row items-center justify-between border-b border-border/60 pb-4"><div><CardTitle className="text-base">Recent deployments</CardTitle><p className="mt-1 text-xs text-muted-foreground">Your latest bot and web activity in one place.</p></div><Link href="/deployments" className="flex items-center gap-1 text-xs text-primary hover:underline">View all <ChevronRight className="h-3.5 w-3.5" /></Link></CardHeader>
+          <CardContent className="p-0">{projects.length ? projects.slice(0, 6).map((project) => <div key={project.id} className="flex items-center gap-3 border-b border-border/50 px-5 py-3.5 last:border-0 hover:bg-white/[0.025]"><div className={`h-2 w-2 shrink-0 rounded-full ${statusDot(project.status)}`} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{project.name}</p><Badge variant="outline" className={`hidden text-[10px] uppercase sm:inline-flex ${statusTone(project.status)}`}>{project.status}</Badge></div><p className="truncate font-mono text-[11px] text-muted-foreground">{project.source}</p></div><span className="hidden text-[11px] text-muted-foreground sm:block">{relativeTime(project.createdAt)}</span><Link href={project.href}><Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-primary" aria-label={`Open ${project.name}`}><ChevronRight className="h-4 w-4" /></Button></Link></div>) : <div className="p-8 text-center"><Cloud className="mx-auto h-8 w-8 text-muted-foreground/50" /><p className="mt-3 text-sm font-medium">Your workspace is ready</p><p className="mt-1 text-xs text-muted-foreground">Create your first bot or web deployment to see it here.</p></div>}</CardContent>
+        </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <motion.div variants={item}>
-          <Card className="border-border/50 bg-card/30 backdrop-blur-sm h-full flex flex-col">
-            <CardHeader>
-               <CardTitle className="text-lg flex items-center gap-2">
-                 <Server className="h-5 w-5 text-primary" /> Recent deployments
-              </CardTitle>
-               <CardDescription>Current instances and their latest runtime state.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1">
-              {deployments && deployments.length > 0 ? (
-                <div className="space-y-4">
-                  {deployments.slice(0, 5).map(dep => (
-                     <div key={dep.id} data-testid={`row-deployment-${dep.id}`} className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50 hover:border-primary/30 transition-colors group">
-                      <div className="flex items-center gap-3">
-                        <div className={`h-2 w-2 rounded-full shadow-[0_0_5px] ${
-                          dep.status === 'running' ? 'bg-accent shadow-accent' : 
-                          dep.status === 'stopped' ? 'bg-muted-foreground shadow-muted-foreground' : 
-                          dep.status === 'deploying' ? 'bg-primary shadow-primary animate-pulse' :
-                          'bg-destructive shadow-destructive'
-                        }`} />
-                        <div>
-                          <div className="font-bold text-sm">{(dep as any).customName || dep.bot?.name || `Bot #${dep.botId}`}</div>
-                          {(dep as any).customName && (
-                            <div className="text-[10px] text-muted-foreground font-mono">{dep.bot?.name || `Bot #${dep.botId}`}</div>
-                          )}
-                           <div className="text-xs text-muted-foreground font-mono">{dep.status}</div>
-                        </div>
-                      </div>
-                      <Link href={`/deployments/${dep.id}`}>
-                         <Button variant="ghost" size="icon" data-testid={`button-open-deployment-${dep.id}`} aria-label={`Open deployment ${dep.id}`} className="h-8 w-8 text-muted-foreground group-hover:text-primary transition-colors">
-                          <ArrowRight className="h-4 w-4" />
-                        </Button>
-                      </Link>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center p-6 border border-dashed border-border/50 rounded-lg">
-                  <Bot className="h-10 w-10 text-muted-foreground/50 mb-3" />
-                   <p className="text-sm font-medium mb-1">Your first deployment starts here</p>
-                   <p className="text-xs text-muted-foreground mb-4">Choose a bot template, add its configuration, and keep the instance visible from this workspace.</p>
-                  <Link href="/bots">
-                    <Button variant="outline" size="sm" className="font-mono border-primary/30 text-primary hover:bg-primary/10">
-                       Browse marketplace
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
+        <Card className="soft-card overflow-hidden"><CardHeader className="border-b border-border/60 pb-4"><CardTitle className="text-base">Quick actions</CardTitle><p className="mt-1 text-xs text-muted-foreground">Common next steps for your workspace.</p></CardHeader><CardContent className="grid grid-cols-2 gap-3 p-4"><Link href="/bots"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-primary/50 hover:bg-primary/5"><Bot className="h-5 w-5 text-primary" /><span className="text-xs">New bot</span></Button></Link><Link href="/web-deployments"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-secondary/50 hover:bg-secondary/5"><Globe2 className="h-5 w-5 text-secondary" /><span className="text-xs">New website</span></Button></Link><Link href="/deployments"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-accent/50 hover:bg-accent/5"><Terminal className="h-5 w-5 text-accent" /><span className="text-xs">View logs</span></Button></Link><Link href="/settings"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-chart-5/50 hover:bg-chart-5/5"><LayoutDashboard className="h-5 w-5 text-chart-5" /><span className="text-xs">Workspace settings</span></Button></Link></CardContent></Card>
+      </section>
 
-        <motion.div variants={item}>
-          <Card className="border-border/50 bg-card/30 backdrop-blur-sm h-full flex flex-col">
-            <CardHeader>
-               <CardTitle className="text-lg flex items-center gap-2">
-                 <Activity className="h-5 w-5 text-secondary" /> Quick actions
-              </CardTitle>
-               <CardDescription>Common next steps for running your workspace.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1">
-              <div className="grid grid-cols-2 gap-3">
-                <Link href="/bots">
-                  <Button variant="outline" className="w-full h-auto py-4 flex flex-col gap-2 border-border/50 hover:border-primary/50 hover:bg-primary/5 transition-all">
-                    <Bot className="h-6 w-6 text-primary" />
-                     <span className="text-sm">Marketplace</span>
-                  </Button>
-                </Link>
-                <Link href="/web-deployments">
-                  <Button variant="outline" className="w-full h-auto py-4 flex flex-col gap-2 border-border/50 hover:border-secondary/50 hover:bg-secondary/5 transition-all">
-                    <Server className="h-6 w-6 text-secondary" />
-                     <span className="text-sm">Deploy web</span>
-                  </Button>
-                </Link>
-                <Link href="/support">
-                  <Button variant="outline" className="w-full h-auto py-4 flex flex-col gap-2 border-border/50 hover:border-accent/50 hover:bg-accent/5 transition-all">
-                    <AlertTriangle className="h-6 w-6 text-accent" />
-                     <span className="text-sm">Contact support</span>
-                  </Button>
-                </Link>
-                <a href="https://wa.me/254787527753" target="_blank" rel="noreferrer">
-                  <Button variant="outline" className="w-full h-auto py-4 flex flex-col gap-2 border-border/50 hover:border-green-500/50 hover:bg-green-500/5 transition-all">
-                    <svg viewBox="0 0 24 24" className="h-6 w-6 fill-accent" xmlns="http://www.w3.org/2000/svg"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                     <span className="text-sm">WhatsApp support</span>
-                  </Button>
-                </a>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
+      {failed > 0 && <Link href="/deployments" className="flex items-center gap-3 rounded-xl border border-destructive/25 bg-destructive/5 p-4 text-sm transition-colors hover:bg-destructive/10"><TriangleAlert className="h-5 w-5 text-destructive" /><span className="flex-1"><strong>{failed} project{failed === 1 ? "" : "s"} need attention.</strong> Open the deployment console to inspect logs and recover.</span><ChevronRight className="h-4 w-4 text-destructive" /></Link>}
     </motion.div>
   );
 }

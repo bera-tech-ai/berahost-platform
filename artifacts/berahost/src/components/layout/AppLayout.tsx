@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { FormEvent, ReactNode, useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Activity,
@@ -14,6 +14,8 @@ import {
   LifeBuoy,
   LogOut,
   Menu,
+  Plus,
+  Search,
   Server,
   Globe2,
   Settings,
@@ -24,7 +26,7 @@ import {
 } from "lucide-react";
 import { useGetMe, useLogout } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -65,7 +67,13 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [location, setLocation] = useLocation();
   const { data: user } = useGetMe();
   const [adminExpanded, setAdminExpanded] = useState(() => location.startsWith("/admin"));
+  const [search, setSearch] = useState("");
   const logoutMutation = useLogout({ mutation: { onSuccess: () => setLocation("/login") } });
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    if (search.trim()) setLocation(`/deployments?search=${encodeURIComponent(search.trim())}`);
+  };
 
   const isNavActive = (path: string) =>
     path === "/dashboard" ? location === path : path === "/admin" ? location === path : location.startsWith(path);
@@ -130,7 +138,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <div className="border-b border-border/60 px-5 py-5">
           <Link href="/dashboard" data-testid="link-brand-dashboard" className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground"><Activity className="h-5 w-5" /></span>
-            <span><span className="block text-lg font-semibold tracking-tight">BERAHOST</span><span className="block text-[10px] font-mono uppercase tracking-[0.16em] text-muted-foreground">Bot operations</span></span>
+            <span><span className="block text-lg font-semibold tracking-tight">BERAHOST</span><span className="block text-[10px] font-mono uppercase tracking-[0.16em] text-muted-foreground">Cloud hosting platform</span></span>
           </Link>
         </div>
         <ScrollArea className="flex-1 px-3"><Navigation /></ScrollArea>
@@ -149,7 +157,31 @@ export function AppLayout({ children }: AppLayoutProps) {
             </SheetContent>
           </Sheet>
         </header>
-        <div className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:px-10 lg:py-9">{children}</div>
+        <header className="hidden h-[4.5rem] items-center justify-between gap-6 border-b border-border/70 bg-background/70 px-8 backdrop-blur-xl lg:flex">
+          <form onSubmit={submitSearch} className="relative w-full max-w-[22rem]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search your projects..." className="h-10 w-full rounded-lg border border-border/70 bg-card/50 pl-10 pr-4 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/50 focus:ring-2 focus:ring-primary/10" aria-label="Search your projects" />
+          </form>
+          <div className="flex items-center gap-3">
+            <Link href="/notifications" className="relative rounded-lg border border-transparent p-2.5 text-muted-foreground transition-colors hover:border-border hover:bg-white/[0.035] hover:text-foreground" aria-label="Notifications">
+              <Bell className="h-4 w-4" />
+              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))]" />
+            </Link>
+            <div className="h-6 w-px bg-border/70" />
+            <Link href="/settings" className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.035]">
+              <Avatar className="h-8 w-8 border border-primary/30"><AvatarImage src={user?.avatarUrl || undefined} /><AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">{initials}</AvatarFallback></Avatar>
+              <div className="hidden xl:block"><p className="max-w-32 truncate text-xs font-medium">{user?.displayName || user?.email || "Account"}</p><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{user?.isAdmin ? "Administrator" : `${user?.subscriptionPlan || "free"} plan`}</p></div>
+            </Link>
+          </div>
+        </header>
+        <div className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 pb-24 sm:px-6 lg:px-10 lg:py-9 lg:pb-9">{children}</div>
+        <nav className="fixed inset-x-0 bottom-0 z-50 flex h-[4.25rem] items-center justify-around border-t border-border/70 bg-sidebar/95 px-3 backdrop-blur-xl lg:hidden">
+          <Link href="/dashboard" className={`flex flex-col items-center gap-1 text-[10px] ${location === "/dashboard" ? "text-primary" : "text-muted-foreground"}`}><LayoutDashboard className="h-4 w-4" />Home</Link>
+          <Link href="/deployments" className={`flex flex-col items-center gap-1 text-[10px] ${location.startsWith("/deployments") ? "text-primary" : "text-muted-foreground"}`}><Server className="h-4 w-4" />Deployments</Link>
+          <Link href="/bots" className="-mt-6 flex h-12 w-12 items-center justify-center rounded-full border-4 border-background bg-primary text-primary-foreground shadow-[0_0_24px_hsl(var(--primary)/.3)]" aria-label="New deployment"><Plus className="h-5 w-5" /></Link>
+          <Link href="/notifications" className={`flex flex-col items-center gap-1 text-[10px] ${location.startsWith("/notifications") ? "text-primary" : "text-muted-foreground"}`}><Bell className="h-4 w-4" />Alerts</Link>
+          <Link href="/settings" className={`flex flex-col items-center gap-1 text-[10px] ${location.startsWith("/settings") ? "text-primary" : "text-muted-foreground"}`}><Settings className="h-4 w-4" />Profile</Link>
+        </nav>
       </main>
     </div>
   );
