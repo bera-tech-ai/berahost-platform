@@ -576,6 +576,13 @@ export async function startBotProcess(
   }
   startingDeployments.add(deploymentId);
 
+  const existingProcess = runningProcesses.get(deploymentId);
+  if (existingProcess && existingProcess.exitCode === null && existingProcess.signalCode === null) {
+    startingDeployments.delete(deploymentId);
+    await emitLog(deploymentId, `[BERAHOST] Start skipped: this bot already has a live process (PID ${existingProcess.pid ?? "unknown"}).`, "warn").catch(() => {});
+    return { pid: existingProcess.pid ?? -1 };
+  }
+
   // Clear intentional-stop flag so this fresh start is tracked
   intentionallyStopped.delete(deploymentId);
   stopRequested.delete(deploymentId);
@@ -1249,6 +1256,7 @@ for (const candidate of candidates) {
     }
 
     runningProcesses.set(deploymentId, botProcess);
+    let processOutputTail = "";
 
     // Release the double-deploy guard now that the process is running
     startingDeployments.delete(deploymentId);
@@ -1262,6 +1270,7 @@ for (const candidate of candidates) {
       const lines = data.toString().split("\n").filter((l) => l.trim());
       for (const line of lines) {
         const clean = stripAnsi(line);
+        processOutputTail = `${processOutputTail}\n${clean}`.trim().slice(-4000);
         await emitLog(deploymentId, clean, "stdout").catch(() => {});
 
         const lower = clean.toLowerCase();
@@ -1395,6 +1404,7 @@ for (const candidate of candidates) {
       const lines = data.toString().split("\n").filter((l) => l.trim());
       for (const line of lines) {
         const clean = stripAnsi(line);
+        processOutputTail = `${processOutputTail}\n${clean}`.trim().slice(-4000);
 
         // ── Suppress install-time noise that always appears as red ────────────
         // These are informational messages from npm or WhatsApp's API that the
@@ -1579,7 +1589,7 @@ for (const candidate of candidates) {
 
       await emitLog(
         deploymentId,
-        `[BERAHOST] ✖ Process exited unexpectedly (code=${code ?? "—"}, signal=${signal ?? "—"}) — scheduling restart...`,
+        `[BERAHOST] ✖ Process exited unexpectedly (code=${code ?? "—"}, signal=${signal ?? "—"}) — scheduling restart. Last output: ${processOutputTail.split("\n").slice(-4).join(" | ") || "No output captured."}`,
         "error"
       ).catch(() => {});
 
@@ -1607,6 +1617,20 @@ for (const candidate of candidates) {
       }
 
       const attempt   = (dep.restartCount ?? 0) + 1;
+      if (attempt > 5) {
+        await db
+          .update(deploymentsTable)
+          .set({ status: "crashed", pid: null, updatedAt: new Date() })
+          .where(eq(deploymentsTable.id, deploymentId))
+          .catch(() => {});
+        await emitLog(
+          deploymentId,
+          `[BERAHOST] Auto-restart paused after 5 consecutive crashes. Review the preceding stderr output, environment variables, session ID, and repository startup requirements, then start the bot manually after fixing them.`,
+          "error"
+        ).catch(() => {});
+        releasePort(deploymentId);
+        return;
+      }
       // Exponential backoff: 0 → 5 → 10 → 20 → 40 → 80 → 120 s (capped)
       const backoffMs = attempt === 1 ? 0 : Math.min(5000 * Math.pow(2, attempt - 2), 120_000);
 
