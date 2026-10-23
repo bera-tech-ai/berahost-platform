@@ -179,7 +179,7 @@ export async function startWebDeployment(id: number): Promise<void> {
     } else {
       await appendBuildLog(id, "[BERAHOST] No readable package.json was found in the extracted repository.");
     }
-    const installCommand = await fs.access(path.join(packageRoot, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(packageRoot, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm install --legacy-peer-deps --no-audit --no-fund"));
+    const installCommand = await fs.access(path.join(packageRoot, "pnpm-lock.yaml")).then(() => "corepack pnpm install --frozen-lockfile").catch(async () => await fs.access(path.join(packageRoot, "yarn.lock")).then(() => "corepack yarn install --frozen-lockfile").catch(() => "npm_config_legacy_peer_deps=true npm install --legacy-peer-deps --no-audit --no-fund || (rm -rf node_modules && corepack pnpm install --no-frozen-lockfile --no-audit)"));
     if (Object.keys(pkg).length > 0) {
       const installLog = await run(installCommand, packageRoot, envVars);
       await appendBuildLog(id, `[BERAHOST] Dependencies installed.\n${installLog}`);
