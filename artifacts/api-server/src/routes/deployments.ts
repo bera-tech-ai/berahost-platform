@@ -7,6 +7,7 @@ import { startBotProcess, stopBotProcess, getPairingCode, clearPairingCode } fro
 import { hashSessionId } from "../lib/auth";
 import { serializeBot } from "./bots";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
+import { redactLogSecrets } from "../lib/redact";
 
 const router = Router();
 
@@ -15,14 +16,14 @@ function deploymentPlan(user: { isAdmin?: boolean; subscriptionPlan?: string | n
   return user.isAdmin ? ADMIN_PLAN : getPlan(user.subscriptionPlan);
 }
 
-function serializeDeployment(dep: any, bot: any) {
+function serializeDeployment(dep: any, bot: any, apiKeySafe = false) {
   return {
     id: dep.id,
     userId: dep.userId,
     botId: dep.botId,
     containerId: dep.containerId,
     pid: dep.pid,
-    envVars: dep.envVars,
+    envVars: apiKeySafe ? undefined : dep.envVars,
     sessionIdLocked: dep.sessionIdLocked,
     status: dep.status,
     platform: dep.platform,
@@ -47,7 +48,7 @@ router.get("/deployments", requireAny("read"), async (req, res): Promise<void> =
   const result = await Promise.all(
     deps.map(async (dep) => {
       const [bot] = await db.select().from(botsTable).where(eq(botsTable.id, dep.botId));
-      return serializeDeployment(dep, bot);
+      return serializeDeployment(dep, bot, Boolean((req as any).apiKey));
     })
   );
 
@@ -117,7 +118,7 @@ router.post("/deployments", requireAny("write"), async (req, res): Promise<void>
     req.log.error({ err, deploymentId: deployment.id }, "Bot process start failed");
   });
 
-  res.status(201).json(serializeDeployment(deployment, bot));
+  res.status(201).json(serializeDeployment(deployment, bot, Boolean((req as any).apiKey)));
 });
 
 router.get("/deployments/:id", requireAny("read"), async (req, res): Promise<void> => {
@@ -131,7 +132,7 @@ router.get("/deployments/:id", requireAny("read"), async (req, res): Promise<voi
   }
 
   const [bot] = await db.select().from(botsTable).where(eq(botsTable.id, dep.botId));
-  res.json(serializeDeployment(dep, bot));
+  res.json(serializeDeployment(dep, bot, Boolean((req as any).apiKey)));
 });
 
 router.delete("/deployments/:id", requireAny("write"), async (req, res): Promise<void> => {
@@ -199,7 +200,7 @@ router.post("/deployments/:id/start", requireAny("write"), async (req, res): Pro
     .where(eq(deploymentsTable.id, id))
     .returning();
 
-  res.json(serializeDeployment(updated, bot));
+  res.json(serializeDeployment(updated, bot, Boolean((req as any).apiKey)));
 });
 
 router.post("/deployments/:id/stop", requireAny("write"), async (req, res): Promise<void> => {
@@ -216,7 +217,7 @@ router.post("/deployments/:id/stop", requireAny("write"), async (req, res): Prom
 
   const [bot] = await db.select().from(botsTable).where(eq(botsTable.id, dep.botId));
   const [updated] = await db.select().from(deploymentsTable).where(eq(deploymentsTable.id, id));
-  res.json(serializeDeployment(updated, bot));
+  res.json(serializeDeployment(updated, bot, Boolean((req as any).apiKey)));
 });
 
 router.put("/deployments/:id/env", requireAny("write"), async (req, res): Promise<void> => {
@@ -270,7 +271,7 @@ router.put("/deployments/:id/env", requireAny("write"), async (req, res): Promis
     .returning();
 
   const [bot] = await db.select().from(botsTable).where(eq(botsTable.id, dep.botId));
-  res.json(serializeDeployment(updated, bot));
+  res.json(serializeDeployment(updated, bot, Boolean((req as any).apiKey)));
 });
 
 router.get("/deployments/:id/logs", requireAny("read"), async (req, res): Promise<void> => {
@@ -295,7 +296,7 @@ router.get("/deployments/:id/logs", requireAny("read"), async (req, res): Promis
     logs.reverse().map((l) => ({
       id: l.id,
       deploymentId: l.deploymentId,
-      logLine: l.logLine,
+      logLine: (req as any).apiKey ? redactLogSecrets(l.logLine, dep.envVars) : l.logLine,
       logType: l.logType,
       createdAt: l.createdAt.toISOString(),
     }))
@@ -352,7 +353,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     customName:     newName,
   }).returning();
 
-  res.status(201).json(serializeDeployment(clone, bot));
+  res.status(201).json(serializeDeployment(clone, bot, Boolean((req as any).apiKey)));
 });
 
 // --- METRICS (CPU/RAM of bot process) ---
@@ -426,12 +427,12 @@ router.get("/deployments/:id/logs/export", requireAny("read"), async (req, res):
     res.json(logs.map((l) => ({
       time: l.createdAt.toISOString(),
       type: l.logType,
-      line: l.logLine,
+      line: (req as any).apiKey ? redactLogSecrets(l.logLine, dep.envVars) : l.logLine,
     })));
   } else {
     res.setHeader("Content-Type", "text/plain");
     const text = logs
-      .map((l) => `[${l.createdAt.toISOString()}] [${l.logType.toUpperCase().padEnd(6)}] ${l.logLine}`)
+      .map((l) => `[${l.createdAt.toISOString()}] [${l.logType.toUpperCase().padEnd(6)}] ${(req as any).apiKey ? redactLogSecrets(l.logLine, dep.envVars) : l.logLine}`)
       .join("\n");
     res.send(text);
   }
@@ -468,7 +469,7 @@ router.put("/deployments/:id/webhook", requireAny("write"), async (req, res): Pr
     .returning();
 
   const [bot] = await db.select().from(botsTable).where(eq(botsTable.id, dep.botId));
-  res.json(serializeDeployment(updated, bot));
+  res.json(serializeDeployment(updated, bot, Boolean((req as any).apiKey)));
 });
 
 // --- CLONE DEPLOYMENT ---
@@ -518,7 +519,7 @@ router.post("/deployments/:id/clone", requireAny("write"), async (req, res): Pro
     .returning();
 
   res.status(201).json({
-    ...serializeDeployment(clone, bot),
+    ...serializeDeployment(clone, bot, Boolean((req as any).apiKey)),
     message: `Deployment cloned successfully. Add your SESSION_ID to start it.`,
   });
 });
@@ -582,7 +583,7 @@ router.get("/deployments/:id/logs/stream", requireAny("read"), async (req, res):
     .where(eq(botLogsTable.deploymentId, depId))
     .orderBy(desc(botLogsTable.createdAt))
     .limit(50);
-  recent.reverse().forEach((log) => send({ id: log.id, level: log.logType, message: log.logLine, ts: log.createdAt }));
+  recent.reverse().forEach((log) => send({ id: log.id, level: log.logType, message: (req as any).apiKey ? redactLogSecrets(log.logLine, dep.envVars) : log.logLine, ts: log.createdAt }));
 
   let lastId = recent[recent.length - 1]?.id ?? 0;
 
@@ -595,7 +596,7 @@ router.get("/deployments/:id/logs/stream", requireAny("read"), async (req, res):
         .orderBy(botLogsTable.id)
         .limit(20);
       for (const log of newLogs) {
-        send({ id: log.id, level: log.logType, message: log.logLine, ts: log.createdAt });
+        send({ id: log.id, level: log.logType, message: (req as any).apiKey ? redactLogSecrets(log.logLine, dep.envVars) : log.logLine, ts: log.createdAt });
         lastId = log.id;
       }
     } catch { /* ignore */ }
@@ -657,7 +658,7 @@ router.post("/deployments/:id/phone", requireAny("write"), async (req, res): Pro
 
 // GET /deployments/:id/paircode
 // Returns the latest pairing code detected in this deployment's stdout (if any).
-router.get("/deployments/:id/paircode", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/deployments/:id/paircode", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const id   = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 

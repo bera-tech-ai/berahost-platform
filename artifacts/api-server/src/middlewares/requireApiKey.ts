@@ -57,7 +57,12 @@ export function requireScope(scope: string) {
     const keyRow = (req as any).apiKey;
     const scopes: string[] = keyRow?.scopes ?? [];
 
-    if (!scopes.includes(scope) && !scopes.includes("admin")) {
+    const allowedScopes = ["read", "write", "payments"];
+    const allowed = allowedScopes.includes(scope) && (
+      scopes.includes(scope) ||
+      (scope === "read" && (scopes.includes("write") || scopes.includes("payments")))
+    );
+    if (!allowed) {
       res.status(403).json({
         error: `API key missing required scope: "${scope}"`,
         yourScopes: scopes,

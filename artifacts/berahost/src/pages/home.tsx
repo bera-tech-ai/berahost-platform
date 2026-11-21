@@ -502,7 +502,7 @@ export default function Home() {
            </div>
            <div className="grid grid-cols-2 gap-8 sm:grid-cols-3">
              <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Explore</p><a href="#platform" className="block py-1.5 hover:text-white">Platform</a><a href="#how-it-works" className="block py-1.5 hover:text-white">How it works</a><a href="#bots" className="block py-1.5 hover:text-white">Hosted bots</a></div>
-             <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Account</p><Link href="/login" className="block py-1.5 hover:text-white">Sign in</Link><Link href="/register" className="block py-1.5 hover:text-white">Create account</Link></div>
+             <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Account</p><Link href="/login" className="block py-1.5 hover:text-white">Sign in</Link><Link href="/register" className="block py-1.5 hover:text-white">Create account</Link><Link href="/status" className="block py-1.5 hover:text-white">Service status</Link></div>
              <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Trust</p><span className="flex items-center gap-2 py-1.5"><LockKeyhole className="h-3.5 w-3.5 text-cyan-300" /> Secure sessions</span><span className="flex items-center gap-2 py-1.5"><Globe2 className="h-3.5 w-3.5 text-cyan-300" /> Built for anywhere</span></div>
            </div>
          </div>

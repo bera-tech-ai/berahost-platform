@@ -27,6 +27,7 @@ import LeaderboardPage from "@/pages/leaderboard";
 import GithubIntegrationPage from "@/pages/github-integration";
 import SubmitBotPage from "@/pages/submit-bot";
 import ReferralsPage from "@/pages/referrals";
+import StatusPage from "@/pages/status";
 import AdminMarketplacePage from "@/pages/admin/marketplace";
 
 // Admin
@@ -65,6 +66,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
+      <Route path="/status" component={StatusPage} />
       
       {/* User Routes */}
       <Route path="/dashboard"><ProtectedRoute component={Dashboard} /></Route>

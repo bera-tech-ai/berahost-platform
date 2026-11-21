@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, botSubmissionsTable, botsTable, usersTable, auditLogsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
-import { requireAny, requireAuth } from "../middlewares/requireAuth";
+import { requireAny, requireAdmin } from "../middlewares/requireAuth";
 
 const router = Router();
 
@@ -66,7 +66,7 @@ router.post("/marketplace/submit", requireAny("write"), async (req, res): Promis
   });
 });
 
-router.get("/admin/marketplace/submissions", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/admin/marketplace/submissions", requireAdmin, async (req, res): Promise<void> => {
   const user = (req as any).user;
   if (!user.isAdmin) {
     res.status(403).json({ error: "Admin only" });
@@ -107,7 +107,7 @@ router.get("/admin/marketplace/submissions", requireAny("read"), async (req, res
   res.json(result);
 });
 
-router.post("/admin/marketplace/submissions/:id/approve", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/admin/marketplace/submissions/:id/approve", requireAdmin, async (req, res): Promise<void> => {
   const user = (req as any).user;
   if (!user.isAdmin) {
     res.status(403).json({ error: "Admin only" });
@@ -152,7 +152,7 @@ router.post("/admin/marketplace/submissions/:id/approve", requireAny("write"), a
   res.json({ message: "Bot approved and added to marketplace", botId: bot.id });
 });
 
-router.post("/admin/marketplace/submissions/:id/reject", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/admin/marketplace/submissions/:id/reject", requireAdmin, async (req, res): Promise<void> => {
   const user = (req as any).user;
   if (!user.isAdmin) {
     res.status(403).json({ error: "Admin only" });

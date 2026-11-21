@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, botLogsTable, deploymentsTable } from "@workspace/db";
 import { eq, and, ilike, desc, gte } from "drizzle-orm";
 import { requireAny } from "../middlewares/requireAuth";
+import { redactLogSecrets } from "../lib/redact";
 
 const router = Router();
 
@@ -48,7 +49,7 @@ router.get("/deployments/:id/logs/search", requireAny("read"), async (req, res):
     total: logs.length,
     logs: logs.map((l) => ({
       id: l.id,
-      logLine: l.logLine,
+      logLine: (req as any).apiKey ? redactLogSecrets(l.logLine, dep.envVars) : l.logLine,
       logType: l.logType,
       createdAt: l.createdAt.toISOString(),
     })).reverse(),

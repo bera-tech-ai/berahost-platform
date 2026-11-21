@@ -25,6 +25,10 @@ export default function ReferralsPage() {
     queryFn: () => apiFetch("/referrals/my").then((r) => r.json()),
   });
 
+  const referralLink = data?.referralCode
+    ? new URL(`${BASE}register?ref=${encodeURIComponent(data.referralCode)}`, window.location.origin).toString()
+    : data?.referralLink ?? "";
+
   const applyCode = useMutation({
     mutationFn: (referralCode: string) =>
       apiFetch("/referrals/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ referralCode }) }).then((r) => r.json()),
@@ -37,8 +41,8 @@ export default function ReferralsPage() {
   });
 
   const copyLink = () => {
-    if (data?.referralLink) {
-      navigator.clipboard.writeText(data.referralLink);
+    if (referralLink) {
+      navigator.clipboard.writeText(referralLink);
       toast({ title: "Copied!", description: "Referral link copied to clipboard" });
     }
   };
@@ -55,8 +59,8 @@ export default function ReferralsPage() {
           <CardContent className="pt-4 pb-3 flex items-center gap-3">
             <Gift className="w-8 h-8 text-cyan-400" />
             <div>
-              <p className="text-xs text-muted-foreground">Your referral benefit</p>
-              <p className="text-2xl font-bold font-mono text-cyan-400">Subscription credit</p>
+              <p className="text-xs text-muted-foreground">Referral tracking</p>
+              <p className="text-2xl font-bold font-mono text-cyan-400">Attribution only</p>
             </div>
           </CardContent>
         </Card>
@@ -64,8 +68,8 @@ export default function ReferralsPage() {
           <CardContent className="pt-4 pb-3 flex items-center gap-3">
             <Users className="w-8 h-8 text-emerald-400" />
             <div>
-              <p className="text-xs text-muted-foreground">Friend gets on signup</p>
-              <p className="text-2xl font-bold font-mono text-emerald-400">Plan guidance</p>
+              <p className="text-xs text-muted-foreground">When friends sign up</p>
+              <p className="text-2xl font-bold font-mono text-emerald-400">Plan choice</p>
             </div>
           </CardContent>
         </Card>
@@ -83,7 +87,7 @@ export default function ReferralsPage() {
             <div>
               <Label className="text-xs text-muted-foreground">Referral Link</Label>
               <div className="flex gap-2 mt-1">
-                <Input value={data?.referralLink ?? ""} readOnly className="font-mono text-xs" />
+                <Input value={referralLink} readOnly className="font-mono text-xs" />
                 <Button variant="outline" onClick={copyLink} className="shrink-0">
                   <Copy className="w-4 h-4 mr-2" />Copy
                 </Button>
@@ -102,7 +106,7 @@ export default function ReferralsPage() {
               </div>
               <div className="text-center">
                 <p className="text-2xl font-bold font-mono text-cyan-400">{data?.totalReferrals ?? 0}</p>
-                <p className="text-xs text-muted-foreground">Plan Referrals</p>
+                <p className="text-xs text-muted-foreground">Tracked Referrals</p>
               </div>
               <div className="text-center">
                 <p className="text-2xl font-bold font-mono text-yellow-400">Active</p>
@@ -139,9 +143,9 @@ export default function ReferralsPage() {
                 <div key={r.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/20">
                   <div className="flex items-center gap-3">
                     <div className="w-7 h-7 rounded-full bg-cyan-500/20 flex items-center justify-center text-xs font-mono text-cyan-400">
-                      {r.email?.[0]?.toUpperCase()}
+                      R{r.id}
                     </div>
-                    <span className="text-sm font-mono">{r.email}</span>
+                    <span className="text-sm font-mono">Referred account</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30 text-xs">Referred</Badge>

@@ -15,8 +15,9 @@ function publicUrl(slug: string) {
   const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;
 }
-function serialize(row: any) {
-  return { ...row, envVars: row.envVars || {}, scannedVars: row.scannedVars || [], publicUrl: publicUrl(row.slug), createdAt: row.createdAt?.toISOString?.() ?? row.createdAt, updatedAt: row.updatedAt?.toISOString?.() ?? null, expiresAt: row.expiresAt?.toISOString?.() ?? null };
+function serialize(row: any, apiKeySafe = false) {
+  const { envVars, ...safeRow } = row;
+  return { ...(apiKeySafe ? safeRow : row), ...(apiKeySafe ? {} : { envVars: envVars || {} }), scannedVars: row.scannedVars || [], publicUrl: publicUrl(row.slug), createdAt: row.createdAt?.toISOString?.() ?? row.createdAt, updatedAt: row.updatedAt?.toISOString?.() ?? null, expiresAt: row.expiresAt?.toISOString?.() ?? null };
 }
 async function activeUser(userId: number) {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
@@ -28,7 +29,7 @@ async function activeUser(userId: number) {
 router.get("/web-deployments", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const rows = await db.select().from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id)).orderBy(desc(webDeploymentsTable.createdAt));
-  res.json(rows.map(serialize));
+  res.json(rows.map((row) => serialize(row, Boolean((req as any).apiKey))));
 });
 
 router.get("/web-deployments/:id", requireAny("read"), async (req, res): Promise<void> => {
@@ -36,7 +37,7 @@ router.get("/web-deployments/:id", requireAny("read"), async (req, res): Promise
   const id = Number(req.params.id);
   const [row] = await db.select().from(webDeploymentsTable).where(and(eq(webDeploymentsTable.id, id), eq(webDeploymentsTable.userId, user.id)));
   if (!row) { res.status(404).json({ error: "Web deployment not found" }); return; }
-  res.json(serialize(row));
+  res.json(serialize(row, Boolean((req as any).apiKey)));
 });
 
 router.post("/web-deployments/scan", requireAny("write"), async (req, res): Promise<void> => {
@@ -88,7 +89,7 @@ router.post("/web-deployments", requireAny("write"), async (req, res): Promise<v
     }
   }
   startWebDeployment(row.id).catch((err) => logger.error({ err, webDeploymentId: row.id }, "Web deployment start failed"));
-  res.status(201).json({ ...serialize(row), automationWarning });
+  res.status(201).json({ ...serialize(row, Boolean((req as any).apiKey)), automationWarning });
 });
 
 router.patch("/web-deployments/:id", requireAny("write"), async (req, res): Promise<void> => {
@@ -106,7 +107,7 @@ router.patch("/web-deployments/:id", requireAny("write"), async (req, res): Prom
     try { await ensureWebDeploymentWebhook(id, managedGithubWebhookUrl(req as any)); }
     catch (error: any) { automationWarning = error?.message || "Automatic deployment could not be enabled."; await db.update(webDeploymentsTable).set({ autoDeploy: false }).where(eq(webDeploymentsTable.id, id)); updated.autoDeploy = false; }
   }
-  res.json({ ...serialize(updated), automationWarning });
+  res.json({ ...serialize(updated, Boolean((req as any).apiKey)), automationWarning });
 });
 
 router.post("/web-deployments/:id/start", requireAny("write"), async (req, res): Promise<void> => {
@@ -166,11 +167,11 @@ router.post("/web-deployments/domains/:id/verify", requireAny("write"), async (r
   try {
     const records = await dns.resolveTxt(`_berahost.${order.hostname}`);
     const verified = records.flat().some((record) => record === order.verificationToken);
-    if (!verified) { res.status(400).json({ verified: false, error: `Add a TXT record at _berahost.${order.hostname} with value ${order.verificationToken}, then try again.` }); return; }
+    if (!verified) { res.status(400).json({ verified: false, error: `Add a TXT record at _berahost.${order.hostname} using the verification token returned when this domain request was created, then try again.` }); return; }
     await db.update(domainOrdersTable).set({ status: "active", verifiedAt: new Date(), updatedAt: new Date() }).where(eq(domainOrdersTable.id, order.id));
     res.json({ verified: true, message: "Domain verified and routed to your hosted web deployment." });
   } catch {
-    res.status(400).json({ verified: false, error: `DNS record not found. Add a TXT record at _berahost.${order.hostname} with value ${order.verificationToken}, then try again.` });
+    res.status(400).json({ verified: false, error: `DNS record not found. Add a TXT record at _berahost.${order.hostname} using the verification token returned when this domain request was created, then try again.` });
   }
 });
 

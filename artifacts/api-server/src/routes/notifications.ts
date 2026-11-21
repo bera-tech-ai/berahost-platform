@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { db, notificationsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../middlewares/requireAuth";
+import { requireAny } from "../middlewares/requireAuth";
 
 const router = Router();
 
-router.get("/notifications", requireAuth, async (req, res): Promise<void> => {
+router.get("/notifications", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const notifs = await db
     .select()
@@ -26,7 +26,7 @@ router.get("/notifications", requireAuth, async (req, res): Promise<void> => {
   );
 });
 
-router.post("/notifications/:id/read", requireAuth, async (req, res): Promise<void> => {
+router.post("/notifications/:id/read", requireAny("write"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 
