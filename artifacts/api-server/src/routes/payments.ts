@@ -7,6 +7,7 @@ import { logger } from "../lib/logger";
 import { sql } from "drizzle-orm";
 import { SUBSCRIPTION_PLANS, subscriptionExpiryFrom } from "../lib/subscriptions";
 
+import { qualifyReferrals } from "./referrals";
 const router = Router();
 const DOMAIN_PRICE_KES = 134;
 
@@ -109,7 +110,7 @@ router.post("/payments/callback", async (req, res): Promise<void> => {
     if (txn.package?.startsWith("sub:")) {
       const plan = txn.package.slice(4);
       const [user] = await db.select().from(usersTable).where(eq(usersTable.id, txn.userId));
-      if (user && plan in SUBSCRIPTION_PLANS) await db.update(usersTable).set({ subscriptionPlan: plan, subscriptionExpiresAt: subscriptionExpiryFrom(user.subscriptionExpiresAt) }).where(eq(usersTable.id, txn.userId));
+      if (user && plan in SUBSCRIPTION_PLANS) { await db.update(usersTable).set({ subscriptionPlan: plan, subscriptionExpiresAt: subscriptionExpiryFrom(user.subscriptionExpiresAt) }).where(eq(usersTable.id, txn.userId)); await qualifyReferrals(txn.userId); }
     } else if (txn.package?.startsWith("domain:")) {
       const orderId = Number(txn.package.slice(7));
       await db.update(domainOrdersTable).set({ status: "paid", updatedAt: new Date() }).where(and(eq(domainOrdersTable.id, orderId), eq(domainOrdersTable.userId, txn.userId)));

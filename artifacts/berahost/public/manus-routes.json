@@ -89,6 +89,10 @@
       "title": "Referrals"
     },
     {
+      "path": "/redeem",
+      "title": "Redeem a Code"
+    },
+    {
       "path": "/admin/marketplace",
       "title": "Admin Marketplace"
     },
@@ -127,6 +131,10 @@
     {
       "path": "/admin/payments",
       "title": "Admin Payments"
+    },
+    {
+      "path": "/admin/referrals",
+      "title": "Admin Referrals & Redeem Codes"
     }
   ]
 }

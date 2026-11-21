@@ -1,48 +1,18 @@
 import { Router } from "express";
-import { db, usersTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
-import { requireAny } from "../middlewares/requireAuth";
-import { logger } from "../lib/logger";
-
-const router = Router();
-
-router.get("/referrals/my", requireAny("read"), async (req, res): Promise<void> => {
-  const user = (req as any).user;
-  const referralLink = `${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : ""}/register?ref=${user.referralCode}`;
-  const [countResult, recentResult] = await Promise.all([
-    db.execute(sql`SELECT COUNT(*)::int AS total FROM referrals WHERE referrer_id = ${user.id}`),
-    db.execute(sql`SELECT id, created_at FROM referrals WHERE referrer_id = ${user.id} ORDER BY created_at DESC LIMIT 50`),
-  ]);
-  const totalReferrals = Number((countResult.rows[0] as any)?.total ?? 0);
-  res.json({
-    referralCode: user.referralCode,
-    referralLink,
-    totalReferrals,
-    referrals: (recentResult.rows as any[]).map((row) => ({ id: row.id, createdAt: row.created_at })),
-  });
-});
-
-router.post("/referrals/apply", requireAny("write"), async (req, res): Promise<void> => {
-  const user = (req as any).user;
-  const referralCode = typeof req.body?.referralCode === "string" ? req.body.referralCode.trim() : "";
-  if (!referralCode) { res.status(400).json({ error: "Referral code is required" }); return; }
-
-  const existing = await db.execute(sql`SELECT id FROM referrals WHERE referred_id = ${user.id} LIMIT 1`);
-  if ((existing.rows as any[]).length > 0) {
-    res.status(400).json({ error: "You have already used a referral code" });
-    return;
-  }
-
-  const [referrer] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.referralCode, referralCode));
-  if (!referrer) { res.status(404).json({ error: "Invalid referral code" }); return; }
-  if (referrer.id === user.id) { res.status(400).json({ error: "You cannot refer yourself" }); return; }
-
-  await db.transaction(async (tx) => {
-    await tx.update(usersTable).set({ referredBy: referrer.id }).where(eq(usersTable.id, user.id));
-    await tx.execute(sql`INSERT INTO referrals (referrer_id, referred_id, coins_awarded) VALUES (${referrer.id}, ${user.id}, 0)`);
-  });
-  logger.info({ referrerId: referrer.id, referredId: user.id }, "Referral applied");
-  res.json({ message: "Referral applied successfully." });
-});
-
+import { db, usersTable, auditLogsTable } from "@workspace/db";
+import { eq, sql, and } from "drizzle-orm";
+import { requireAuth, requireAdmin } from "../middlewares/requireAuth";
+import { createHash, randomBytes } from "node:crypto";
+const router=Router(), plans=new Set(["starter","silver","gold"]), hash=(s:string)=>createHash("sha256").update(s.trim().toUpperCase()).digest("hex");
+export async function qualifyReferrals(uid:number){await db.transaction(async tx=>{const [u]=await tx.select().from(usersTable).where(eq(usersTable.id,uid)).for("update");if(!u?.isVerified||!u.referredBy)return;const paid=await tx.execute(sql`SELECT 1 FROM payment_transactions WHERE user_id=${uid} AND status='success' AND package LIKE 'sub:%' LIMIT 1`);if(!paid.rows.length)return;const ins=await tx.execute(sql`INSERT INTO referral_qualifications(referred_id,referrer_id) VALUES(${uid},${u.referredBy}) ON CONFLICT(referred_id) DO NOTHING RETURNING referred_id`);if(!ins.rows.length)return;await tx.execute(sql`SELECT pg_advisory_xact_lock(${u.referredBy})`);const [p]=(await tx.execute(sql`SELECT * FROM referral_program LIMIT 1`)).rows as any[];if(!p?.enabled)return;const [q]=(await tx.execute(sql`SELECT count(*)::int n FROM referral_qualifications WHERE referrer_id=${u.referredBy}`)).rows as any[];const [issued]=(await tx.execute(sql`SELECT count(*)::int n FROM referral_rewards WHERE referrer_id=${u.referredBy}`)).rows as any[];for(let i=0;i<Math.floor(q.n/p.referrals_required)-issued.n;i++)await tx.execute(sql`INSERT INTO referral_rewards(referrer_id,plan,duration_days) VALUES(${u.referredBy},${p.reward_plan},${p.reward_duration_days})`);});}
+async function grant(tx:any,uid:number,plan:string,days:number){const [u]=(await tx.execute(sql`SELECT subscription_plan,subscription_expires_at FROM users WHERE id=${uid} FOR UPDATE`)).rows as any[];const rank:any={free:0,starter:1,silver:2,gold:3};if(u.subscription_expires_at&&new Date(u.subscription_expires_at)>new Date()&&(rank[u.subscription_plan]||0)>rank[plan])return null;const exp=u.subscription_expires_at&&new Date(u.subscription_expires_at)>new Date()?new Date(u.subscription_expires_at):new Date();exp.setUTCDate(exp.getUTCDate()+days);await tx.execute(sql`UPDATE users SET subscription_plan=${plan},subscription_expires_at=${exp} WHERE id=${uid}`);return exp;}
+router.get("/referrals/my",requireAuth,async(req,res)=>{const u=(req as any).user;await qualifyReferrals(u.id);const [p]=(await db.execute(sql`SELECT * FROM referral_program LIMIT 1`)).rows as any[];const program=p||{enabled:true,referrals_required:3,reward_plan:"starter",reward_duration_days:30};const referrals=(await db.execute(sql`SELECT u.id,u.created_at,q.qualified_at FROM users u LEFT JOIN referral_qualifications q ON q.referred_id=u.id WHERE u.referred_by=${u.id} ORDER BY u.created_at DESC LIMIT 100`)).rows as any[];const rewards=(await db.execute(sql`SELECT * FROM referral_rewards WHERE referrer_id=${u.id} ORDER BY id DESC`)).rows as any[];const total=(await db.execute(sql`SELECT count(*)::int n FROM users WHERE referred_by=${u.id}`)).rows[0] as any,qualified=(await db.execute(sql`SELECT count(*)::int n FROM referral_qualifications WHERE referrer_id=${u.id}`)).rows[0] as any;res.json({referralCode:u.referralCode,totalReferrals:total.n,qualifiedReferrals:qualified.n,referrals:referrals.map(x=>({id:x.id,createdAt:x.created_at,qualifiedAt:x.qualified_at})),program:{enabled:program.enabled,referralsRequired:program.referrals_required,rewardPlan:program.reward_plan,rewardDurationDays:program.reward_duration_days},progressTowardReward:program.enabled?qualified.n%program.referrals_required:0,rewards:rewards.map(x=>({id:x.id,plan:x.plan,durationDays:x.duration_days,status:x.status,createdAt:x.created_at,claimedAt:x.claimed_at,expiresAt:x.expires_at}))});});
+router.post("/referrals/rewards/:id/claim",requireAuth,async(req,res)=>{const uid=(req as any).user.id;const out=await db.transaction(async tx=>{const [r]=(await tx.execute(sql`SELECT * FROM referral_rewards WHERE id=${Number(req.params.id)} AND referrer_id=${uid} FOR UPDATE`)).rows as any[];if(!r||r.status!=="available")return {error:"Reward unavailable"};const exp=await grant(tx,uid,r.plan,r.duration_days);if(!exp)return {error:"Would downgrade active plan"};await tx.execute(sql`UPDATE referral_rewards SET status='claimed',claimed_at=NOW(),expires_at=${exp} WHERE id=${r.id}`);return {plan:r.plan,expiresAt:exp};});if(out.error){res.status(409).json(out);return;}res.json(out);});
+router.post("/referrals/apply",requireAuth,async(req,res)=>{const u=(req as any).user,code=String(req.body?.referralCode||"").trim().toUpperCase();const [r]=await db.select({id:usersTable.id}).from(usersTable).where(eq(usersTable.referralCode,code));if(!r){res.status(404).json({error:"Invalid referral code"});return;}if(r.id===u.id){res.status(400).json({error:"Cannot refer yourself"});return;}const [updated]=await db.update(usersTable).set({referredBy:r.id}).where(and(eq(usersTable.id,u.id),sql`${usersTable.referredBy} IS NULL`)).returning();if(!updated){res.status(409).json({error:"Referral already applied"});return;}await qualifyReferrals(u.id);res.json({message:"Referral applied successfully."});});
+router.get("/admin/referral-program",requireAdmin,async(_req,res)=>{let [p]=(await db.execute(sql`SELECT * FROM referral_program LIMIT 1`)).rows as any[];if(!p)p=(await db.execute(sql`INSERT INTO referral_program DEFAULT VALUES RETURNING *`)).rows[0] as any;res.json({settings:{enabled:p.enabled,referralsRequired:p.referrals_required,rewardPlan:p.reward_plan,rewardDurationDays:p.reward_duration_days}});});
+router.put("/admin/referral-program",requireAdmin,async(req,res)=>{const s=req.body,a=(req as any).user;if(typeof s?.enabled!=="boolean"||!Number.isInteger(s.referralsRequired)||s.referralsRequired<1||!plans.has(s.rewardPlan)||!Number.isInteger(s.rewardDurationDays)||s.rewardDurationDays<1||s.rewardDurationDays>3650){res.status(400).json({error:"Invalid settings"});return;}await db.transaction(async tx=>{await tx.execute(sql`INSERT INTO referral_program(id,enabled,referrals_required,reward_plan,reward_duration_days,updated_by) VALUES(1,${s.enabled},${s.referralsRequired},${s.rewardPlan},${s.rewardDurationDays},${a.id}) ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,referrals_required=EXCLUDED.referrals_required,reward_plan=EXCLUDED.reward_plan,reward_duration_days=EXCLUDED.reward_duration_days,updated_by=EXCLUDED.updated_by,updated_at=NOW()`);await tx.insert(auditLogsTable).values({adminId:a.id,action:"referral_program_update",details:s,ipAddress:req.ip||null});});res.json({settings:s});});
+router.get("/admin/redeem-codes",requireAdmin,async(_req,res)=>{const r=await db.execute(sql`SELECT id,plan,duration_days,max_redemptions,expires_at,label,status,created_at,(SELECT count(*)::int FROM redeem_code_redemptions x WHERE x.code_id=c.id) redemptions FROM redeem_codes c ORDER BY id DESC`);res.json(r.rows);});
+router.post("/admin/redeem-codes",requireAdmin,async(req,res)=>{const {plan,durationDays,maxRedemptions,expiresAt,label}=req.body||{},a=(req as any).user;if(!plans.has(plan)||!Number.isInteger(durationDays)||durationDays<1||durationDays>3650||(maxRedemptions!=null&&(!Number.isInteger(maxRedemptions)||maxRedemptions<1))||(expiresAt&&isNaN(Date.parse(expiresAt)))){res.status(400).json({error:"Invalid settings"});return;}const code=randomBytes(18).toString("hex").toUpperCase(),r=await db.execute(sql`INSERT INTO redeem_codes(code_hash,plan,duration_days,max_redemptions,expires_at,label,created_by) VALUES(${hash(code)},${plan},${durationDays},${maxRedemptions??null},${expiresAt?new Date(expiresAt):null},${label||null},${a.id}) RETURNING id,plan,duration_days,max_redemptions,expires_at,label,status,created_at`);await db.insert(auditLogsTable).values({adminId:a.id,action:"redeem_code_create",details:{id:(r.rows[0] as any).id,plan,durationDays,maxRedemptions:maxRedemptions??null,expiresAt:expiresAt??null,label:label??null},ipAddress:req.ip||null});res.status(201).json({code,redeemCode:r.rows[0]});});
+router.patch("/admin/redeem-codes/:id/status",requireAdmin,async(req,res)=>{const {status}=req.body||{},a=(req as any).user;if(!["active","paused","revoked"].includes(status)){res.status(400).json({error:"Invalid status"});return;}const r=await db.execute(sql`UPDATE redeem_codes SET status=${status},updated_at=NOW() WHERE id=${Number(req.params.id)} RETURNING id,status`);if(!r.rows.length){res.status(404).json({error:"Not found"});return;}await db.insert(auditLogsTable).values({adminId:a.id,action:"redeem_code_status",details:r.rows[0],ipAddress:req.ip||null});res.json(r.rows[0]);});
+router.post("/redeem-codes/redeem",requireAuth,async(req,res)=>{const uid=(req as any).user.id,code=String(req.body?.code||"").trim().toUpperCase();const out=await db.transaction(async tx=>{const [c]=(await tx.execute(sql`SELECT * FROM redeem_codes WHERE code_hash=${hash(code)} FOR UPDATE`)).rows as any[];if(!c||c.status!=="active"||(c.expires_at&&new Date(c.expires_at)<=new Date()))return {error:"Code invalid or expired"};const [n]=(await tx.execute(sql`SELECT count(*)::int n FROM redeem_code_redemptions WHERE code_id=${c.id}`)).rows as any[];if(c.max_redemptions!==null&&n.n>=c.max_redemptions)return {error:"Redemption limit reached"};if((await tx.execute(sql`SELECT 1 FROM redeem_code_redemptions WHERE code_id=${c.id} AND user_id=${uid}`)).rows.length)return {error:"Already redeemed"};const exp=await grant(tx,uid,c.plan,c.duration_days);if(!exp)return {error:"Would downgrade active plan"};await tx.execute(sql`INSERT INTO redeem_code_redemptions(code_id,user_id,plan,duration_days,expires_at) VALUES(${c.id},${uid},${c.plan},${c.duration_days},${exp})`);return {plan:c.plan,expiresAt:exp};});if(out.error){res.status(409).json(out);return;}res.json({message:"Code redeemed successfully",...out});});
 export default router;

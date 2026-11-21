@@ -27,6 +27,7 @@ import LeaderboardPage from "@/pages/leaderboard";
 import GithubIntegrationPage from "@/pages/github-integration";
 import SubmitBotPage from "@/pages/submit-bot";
 import ReferralsPage from "@/pages/referrals";
+import RedeemPage from "@/pages/redeem";
 import StatusPage from "@/pages/status";
 import AdminMarketplacePage from "@/pages/admin/marketplace";
 
@@ -40,6 +41,7 @@ import AdminTicketDetail from "@/pages/admin/support-ticket";
 import AdminAuditLogs from "@/pages/admin/audit-logs";
 import AdminSettings from "@/pages/admin/settings";
 import AdminPaymentsPage from "@/pages/admin/payments";
+import AdminReferralsPage from "@/pages/admin/referrals";
 
 import NotFound from "@/pages/not-found";
 
@@ -87,6 +89,7 @@ function Router() {
       <Route path="/github"><ProtectedRoute component={GithubIntegrationPage} /></Route>
       <Route path="/submit-bot"><ProtectedRoute component={SubmitBotPage} /></Route>
       <Route path="/referrals"><ProtectedRoute component={ReferralsPage} /></Route>
+      <Route path="/redeem"><ProtectedRoute component={RedeemPage} /></Route>
       <Route path="/admin/marketplace"><ProtectedRoute component={AdminMarketplacePage} /></Route>
 
       {/* Admin Routes */}
@@ -99,6 +102,7 @@ function Router() {
       <Route path="/admin/audit-logs"><ProtectedRoute component={AdminAuditLogs} /></Route>
       <Route path="/admin/settings"><ProtectedRoute component={AdminSettings} /></Route>
       <Route path="/admin/payments"><ProtectedRoute component={AdminPaymentsPage} /></Route>
+      <Route path="/admin/referrals"><ProtectedRoute component={AdminReferralsPage} /></Route>
 
       <Route component={NotFound} />
     </Switch>

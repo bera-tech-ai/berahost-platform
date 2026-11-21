@@ -1,162 +1,42 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
-import { Gift, Copy, Users, ChevronRight, Send } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, Gift, Link2, Send, Users } from "lucide-react";
+import { format } from "date-fns";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { format } from "date-fns";
 
 const BASE = import.meta.env.BASE_URL;
-const apiFetch = (path: string, opts?: RequestInit) =>
-  fetch(`${BASE}api${path}`, { credentials: "include", ...opts });
-
+async function request(path: string, init?: RequestInit) {
+  const response = await fetch(`${BASE}api${path}`, { credentials: "include", ...init });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) throw new Error(data?.error || data?.message || `Request failed (${response.status})`);
+  return data;
+}
+const dateLabel = (value?: string | null) => value ? format(new Date(value), "MMM d, yyyy") : "—";
 export default function ReferralsPage() {
-  const { toast } = useToast();
   const qc = useQueryClient();
   const [code, setCode] = useState("");
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["referrals"],
-    queryFn: () => apiFetch("/referrals/my").then((r) => r.json()),
-  });
-
-  const referralLink = data?.referralCode
-    ? new URL(`${BASE}register?ref=${encodeURIComponent(data.referralCode)}`, window.location.origin).toString()
-    : data?.referralLink ?? "";
-
-  const applyCode = useMutation({
-    mutationFn: (referralCode: string) =>
-      apiFetch("/referrals/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ referralCode }) }).then((r) => r.json()),
-    onSuccess: (res) => {
-      if (res.error) { toast({ title: "Error", description: res.error, variant: "destructive" }); return; }
-      toast({ title: "Referral Applied!", description: res.message });
-      setCode("");
-      qc.invalidateQueries({ queryKey: ["referrals"] });
-    },
-  });
-
-  const copyLink = () => {
-    if (referralLink) {
-      navigator.clipboard.writeText(referralLink);
-      toast({ title: "Copied!", description: "Referral link copied to clipboard" });
-    }
-  };
-
-  return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight font-mono">REFERRAL PROGRAM</h1>
-        <p className="text-muted-foreground text-sm">Invite friends and grow the BERAHOST community</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <Card className="border-cyan-500/20 bg-cyan-500/5">
-          <CardContent className="pt-4 pb-3 flex items-center gap-3">
-            <Gift className="w-8 h-8 text-cyan-400" />
-            <div>
-              <p className="text-xs text-muted-foreground">Referral tracking</p>
-              <p className="text-2xl font-bold font-mono text-cyan-400">Attribution only</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-emerald-500/20 bg-emerald-500/5">
-          <CardContent className="pt-4 pb-3 flex items-center gap-3">
-            <Users className="w-8 h-8 text-emerald-400" />
-            <div>
-              <p className="text-xs text-muted-foreground">When friends sign up</p>
-              <p className="text-2xl font-bold font-mono text-emerald-400">Plan choice</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {isLoading ? (
-        <Skeleton className="h-32 w-full" />
-      ) : (
-        <Card className="border-white/10 bg-black/40">
-          <CardHeader>
-            <CardTitle className="font-mono text-base">Your Referral Link</CardTitle>
-            <CardDescription>Share this link and invite friends to choose a monthly hosting plan.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label className="text-xs text-muted-foreground">Referral Link</Label>
-              <div className="flex gap-2 mt-1">
-                <Input value={referralLink} readOnly className="font-mono text-xs" />
-                <Button variant="outline" onClick={copyLink} className="shrink-0">
-                  <Copy className="w-4 h-4 mr-2" />Copy
-                </Button>
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Your Referral Code</Label>
-              <div className="mt-1">
-                <code className="text-lg font-mono font-bold text-cyan-400 bg-cyan-500/10 px-3 py-1 rounded-lg">{data?.referralCode}</code>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3 pt-2 border-t border-white/10">
-              <div className="text-center">
-                <p className="text-2xl font-bold font-mono text-white">{data?.totalReferrals ?? 0}</p>
-                <p className="text-xs text-muted-foreground">Total Referrals</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-bold font-mono text-cyan-400">{data?.totalReferrals ?? 0}</p>
-                <p className="text-xs text-muted-foreground">Tracked Referrals</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-bold font-mono text-yellow-400">Active</p>
-                <p className="text-xs text-muted-foreground">Referral status</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className="border-white/10 bg-black/40">
-        <CardHeader>
-          <CardTitle className="font-mono text-base">Have a Referral Code?</CardTitle>
-          <CardDescription>Enter a friend's code to connect your account to the referral program.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="e.g. ADMINBERA" className="font-mono" />
-            <Button className="bg-cyan-500 hover:bg-cyan-400 text-black shrink-0" onClick={() => applyCode.mutate(code)} disabled={!code.trim() || applyCode.isPending}>
-              <Send className="w-4 h-4 mr-2" />{applyCode.isPending ? "Applying..." : "Apply Code"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {(data?.referrals ?? []).length > 0 && (
-        <Card className="border-white/10 bg-black/40">
-          <CardHeader>
-            <CardTitle className="font-mono text-base">People You Referred</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {(data.referrals as any[]).map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/20">
-                  <div className="flex items-center gap-3">
-                    <div className="w-7 h-7 rounded-full bg-cyan-500/20 flex items-center justify-center text-xs font-mono text-cyan-400">
-                      R{r.id}
-                    </div>
-                    <span className="text-sm font-mono">Referred account</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30 text-xs">Referred</Badge>
-                    <span className="text-xs text-muted-foreground">{format(new Date(r.createdAt), "MMM d")}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
+  const [copied, setCopied] = useState(false);
+  const query = useQuery({ queryKey: ["referrals"], queryFn: () => request("/referrals/my") });
+  const apply = useMutation({ mutationFn: () => request("/referrals/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ referralCode: code.trim() }) }), onSuccess: () => { setCode(""); qc.invalidateQueries({ queryKey: ["referrals"] }); }, });
+  const claim = useMutation({ mutationFn: (id: string | number) => request(`/referrals/rewards/${id}/claim`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["referrals"] }) });
+  const data = query.data;
+  const fullLink = data?.referralCode ? new URL(`${BASE.replace(/\/$/, "")}/register?ref=${encodeURIComponent(data.referralCode)}`, window.location.origin).toString() : "";
+  const reward = data?.program;
+  const threshold = Math.max(1, Number(reward?.referralsRequired ?? 3));
+  const progress = Math.min(threshold, Number(data?.progressTowardReward ?? (Number(data?.qualifiedReferrals || 0) % threshold)));
+  const error = (e: any) => e?.message || "Something went wrong. Please try again.";
+  async function copyLink() { try { await navigator.clipboard.writeText(fullLink); setCopied(true); window.setTimeout(() => setCopied(false), 1800); } catch { window.alert("Could not copy the link. Select and copy it manually."); } }
+  return <div className="mx-auto max-w-5xl space-y-6">
+    <header><p className="text-xs font-mono uppercase tracking-[.2em] text-primary">Growth / Rewards</p><h1 className="mt-2 text-2xl font-bold tracking-tight">Referral program</h1><p className="mt-1 text-sm text-muted-foreground">Invite the community and earn hosting time when referrals qualify.</p></header>
+    {query.isLoading ? <Card><CardContent className="p-8 text-sm text-muted-foreground">Loading your referral details…</CardContent></Card> : query.isError ? <Card className="border-destructive/40"><CardContent className="p-5 text-sm text-destructive">Could not load referral details. {error(query.error)} <Button variant="outline" size="sm" className="ml-3" onClick={() => query.refetch()}>Retry</Button></CardContent></Card> : <>
+      {!reward?.enabled && <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">The referral rewards program is currently paused. Your attribution and qualification history remain visible.</div>}
+      <div className="grid gap-4 md:grid-cols-3"><Card className="md:col-span-2 border-primary/20 bg-primary/[.04]"><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Link2 className="h-4 w-4 text-primary"/> Your share link</CardTitle><CardDescription>Share your unique link. It includes the full BERAHOST origin.</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex flex-col gap-2 sm:flex-row"><Input readOnly value={fullLink} aria-label="Full referral link" className="font-mono text-xs"/><Button onClick={copyLink} disabled={!fullLink} className="shrink-0">{copied ? <Check className="mr-2 h-4 w-4"/> : <Copy className="mr-2 h-4 w-4"/>}{copied ? "Copied" : "Copy link"}</Button></div><p className="text-xs text-muted-foreground">Referral code: <span className="font-mono text-foreground">{data?.referralCode || "—"}</span></p></CardContent></Card><Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="h-4 w-4 text-primary"/> Qualification</CardTitle><CardDescription>Qualified referrals count toward rewards.</CardDescription></CardHeader><CardContent><div className="flex items-end gap-2"><span className="font-mono text-3xl font-bold">{data?.qualifiedReferrals ?? 0}</span><span className="pb-1 text-sm text-muted-foreground">qualified</span></div><div className="mt-4 flex gap-1.5" aria-label={`${progress} of ${threshold} toward next reward`}>{Array.from({length: threshold}, (_, i) => <span key={i} className={`h-2 flex-1 rounded-full ${i < progress ? "bg-primary" : "bg-muted"}`}/>)}</div><p className="mt-2 text-xs text-muted-foreground">{reward?.enabled ? `${progress} of ${threshold} qualified referrals toward next reward` : "Rewards are paused"}</p></CardContent></Card></div>
+      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Gift className="h-4 w-4 text-primary"/> Earned rewards</CardTitle><CardDescription>Every {threshold} qualified referrals earns {Number(reward?.rewardDurationDays ?? 30)} days of {reward?.rewardPlan || "Starter"}. This is a plan benefit only—not cash, coins, credits, or a discount.</CardDescription></CardHeader><CardContent className="space-y-3">{!data?.rewards?.length ? <p className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">No rewards earned yet. Keep sharing to unlock your first plan benefit.</p> : data.rewards.map((item: any) => <div key={item.id} className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/30 p-4 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{item.plan} · {item.durationDays} days</span><Badge variant={item.status === "available" ? "default" : "secondary"}>{item.status}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Earned {dateLabel(item.createdAt)}{item.claimedAt ? ` · Claimed ${dateLabel(item.claimedAt)}` : ""}{item.expiresAt ? ` · Expires ${dateLabel(item.expiresAt)}` : ""}</p></div>{item.status === "available" && <Button disabled={claim.isPending} onClick={() => claim.mutate(item.id)}>{claim.isPending ? "Claiming…" : "Claim benefit"}</Button>}</div>)}{claim.isError && <p role="alert" className="text-sm text-destructive">Could not claim reward. {error(claim.error)}</p>}{claim.isSuccess && <p role="status" className="text-sm text-emerald-400">Reward claimed. Your referral status has been refreshed.</p>}</CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-base">Apply a referral code</CardTitle><CardDescription>If you were invited by someone, enter their code to apply attribution to your account.</CardDescription></CardHeader><CardContent><form className="flex flex-col gap-2 sm:flex-row" onSubmit={e => { e.preventDefault(); apply.mutate(); }}><Input value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="Enter referral code" className="font-mono"/><Button disabled={!code.trim() || apply.isPending}>{apply.isPending ? "Applying…" : <><Send className="mr-2 h-4 w-4"/>Apply code</>}</Button></form>{apply.isError && <p role="alert" className="mt-3 text-sm text-destructive">Could not apply code. {error(apply.error)}</p>}{apply.isSuccess && <p role="status" className="mt-3 text-sm text-emerald-400">Referral code applied successfully.</p>}</CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-base">Referral activity</CardTitle></CardHeader><CardContent className="space-y-2">{!data?.referrals?.length ? <p className="text-sm text-muted-foreground">No referrals have been attributed to your account yet.</p> : data.referrals.map((r: any) => <div key={r.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/20 p-3"><span className="text-sm">Referred account <span className="ml-2 text-xs text-muted-foreground">{dateLabel(r.createdAt)}</span></span><Badge variant={r.qualifiedAt ? "default" : "secondary"}>{r.qualifiedAt ? "Qualified" : "Pending qualification"}</Badge></div>)}</CardContent></Card>
+    </>}
+  </div>;
 }

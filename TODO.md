@@ -64,7 +64,10 @@
 - API-key access is enabled for approved customer functionality currently protected only by browser-session middleware, without exposing excluded session or OAuth operations.
 
 ## ⏳ Referral-first trust and reliability improvements
-- A referral share link opens `/register?ref=CODE` on the current BERAHOST origin; registration pre-fills the code, submits it with signup, and clearly reports invalid codes. Successful signup records the referrer relationship once in both the user attribution field and referral history. Referral behavior is attribution-only: signup and referral application award no legacy coin balance or reward.
+- A referral share link opens `/register?ref=CODE` on the current BERAHOST origin; registration pre-fills the code, submits it with signup, and clearly reports invalid/self-referral codes. Persist attribution exactly once in the existing `users.referred_by` field; referral APIs must not depend on an undeclared `referrals` table, and attribution/signup never award legacy coins.
+- A referred account qualifies only after verification and its first successful paid subscription; each referred user qualifies at most once, including when payment callbacks are retried. Canceled/failed payments do not qualify.
+- Default reward: every 3 qualified referrals earns one claimable 30-day Starter benefit; progress carries forward. A user sees the share link, qualified-referral progress, and earned/claimable reward state. Claiming must not silently downgrade an active higher plan.
+- Admin can enable or pause the referral program and change the threshold, reward plan (Starter/Silver/Gold), and reward duration; settings and reward grants/claims are auditable. No cash, credits, discounts, or legacy coin rewards are advertised or issued.
 - The customer dashboard shows each owned bot/web deployment's current state, uptime where available, last restart/error context where available, and bot connection state only when the runtime can report it. Web redeploy and rollback controls reuse retained successful deployment artifacts and clearly explain when no rollback target exists.
 - Customers can see active plan, canonical per-plan deployment limits, used/remaining bot and web capacity, and expiry/renewal date from server-returned plan data. No replacement limits or API-request quotas are invented.
 - Payment history exposes provider status, amount, date, receipt/reference when actually supplied, and actionable pending/failed guidance. The interface does not promise automatic renewals or settlement guarantees unsupported by PayHero integration.
@@ -72,3 +75,9 @@
 - Customers can inspect a privacy-safe activity history for important account/deployment/API-key/payment actions, with credentials, secret values, session material, and other customers' data excluded.
 - A public service-status page reports only live checks/known incident information that BERAHOST can substantiate, distinguishing dashboard/API, database, hosting, and payment-provider checks; it does not imply an uptime SLA or monitoring history that is not implemented.
 - Any persistence changes are scoped to the isolated `berahost` PostgreSQL schema; existing `public` data remains untouched. Complex implementation is checked by one read-only validation agent, and build/check results and publication status are reported accurately.
+
+## ⏳ Plan-specific redeem codes
+- An admin can create a code for a selected canonical plan (Starter, Silver, or Gold), set its benefit duration, optional maximum redemptions, and optional expiration date, and pause/revoke it without deleting redemption history.
+- Generated plaintext is shown to the admin once; the database stores only a normalized code hash. Admin views show plan, duration, redemptions/limit, expiry, and status without exposing hashes.
+- A signed-in user can redeem a valid code at most once per account per code. Invalid, paused, expired, exhausted, and previously used codes receive clear responses. Successful redemption applies the selected plan and expiry atomically and is audited; it cannot silently downgrade an active higher plan.
+- Redeem-code and referral records use additive tables/migration in the isolated `berahost` schema; existing `public` data remains untouched, and no production DDL is executed as part of this GitHub change.

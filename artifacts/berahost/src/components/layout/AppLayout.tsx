@@ -48,6 +48,7 @@ const growthLinks = [
 const accountLinks = [
   { name: "Payments", href: "/payments", icon: CreditCard },
   { name: "Subscription", href: "/subscriptions", icon: ShieldCheck },
+  { name: "Redeem code", href: "/redeem", icon: Gift },
 ];
 const supportLinks = [
   { name: "Notifications", href: "/notifications", icon: Bell },
@@ -60,6 +61,7 @@ const adminLinks = [
   { name: "Users", href: "/admin/users", icon: Users },
   { name: "Deployments", href: "/admin/deployments", icon: Activity },
   { name: "Payments", href: "/admin/payments", icon: CreditCard },
+  { name: "Referrals & codes", href: "/admin/referrals", icon: Gift },
   { name: "Support", href: "/admin/support", icon: LifeBuoy },
 ];
 

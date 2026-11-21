@@ -6,6 +6,7 @@ import { eq, sql, and, gt } from "drizzle-orm";
 import { hashPassword, comparePassword, generateReferralCode, serializeUser } from "../lib/auth";
 import { requireAuth } from "../middlewares/requireAuth";
 import { requireAdmin } from "../middlewares/requireAdmin";
+import { qualifyReferrals } from "./referrals";
 import { sendWhatsAppMessage, getWASenderStatus } from "../lib/waSender";
 import { encryptGithubToken, exchangeGithubCode, getGithubIdentity, githubCallbackUrl, githubConfigured, publicBaseUrl } from "../lib/github";
 import { exchangeGoogleCode, getGoogleIdentity, googleAuthorizationUrl, googleCallbackUrl, googleConfigured, googleState } from "../lib/google";
@@ -190,11 +191,12 @@ router.post("/auth/register", async (req, res): Promise<void> => {
       .returning();
 
     if (referredById !== null) {
-      await tx.execute(sql`INSERT INTO referrals (referrer_id, referred_id, coins_awarded) VALUES (${referredById}, ${createdUser.id}, 0)`);
+
     }
     return createdUser;
   });
 
+  if (user.isVerified) await qualifyReferrals(user.id);
   req.session.userId = user.id;
 
   res.status(201).json({ user: serializeUser(user), message: "Account created successfully" });
@@ -220,6 +222,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     return;
   }
 
+  if (user.isVerified) await qualifyReferrals(user.id);
   req.session.userId = user.id;
 
   res.json({ user: serializeUser(user), message: "Login successful" });
@@ -269,6 +272,7 @@ router.get("/auth/github/callback", async (req, res): Promise<void> => {
 
     if (!user) throw new Error("Could not create or find your BERAHOST account.");
     [user] = await db.update(usersTable).set({ githubId: String(identity.id), githubLogin: identity.login, githubAvatarUrl: identity.avatarUrl, githubAccessTokenEncrypted: encryptedToken, isVerified: true, ...(user.displayName ? {} : { displayName: identity.name || identity.login }), ...(user.avatarUrl ? {} : { avatarUrl: identity.avatarUrl }) }).where(eq(usersTable.id, user.id)).returning();
+    await qualifyReferrals(user.id);
     (req.session as any).userId = user.id;
     const separator = oauth.returnTo.includes("?") ? "&" : "?";
     res.redirect(`${publicBaseUrl(req as any)}${oauth.returnTo}${separator}github=connected`);
@@ -311,6 +315,7 @@ router.get("/auth/google/callback", async (req, res): Promise<void> => {
       throw new Error("Account banned. Contact support.");
     }
     [user] = await db.update(usersTable).set({ googleId: identity.id, googleAvatarUrl: identity.avatarUrl, isVerified: true, ...(user.displayName ? {} : { displayName: identity.name }), ...(user.avatarUrl ? {} : { avatarUrl: identity.avatarUrl }) }).where(eq(usersTable.id, user.id)).returning();
+    await qualifyReferrals(user.id);
     (req.session as any).userId = user.id;
     const separator = oauth.returnTo.includes("?") ? "&" : "?";
     res.redirect(`${publicBaseUrl(req as any)}${oauth.returnTo}${separator}google=connected`);

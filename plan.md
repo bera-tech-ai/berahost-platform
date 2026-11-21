@@ -104,6 +104,26 @@ Exclude admin operations, login/password/session-security operations, session ba
 
 Customer API keys may access only the key owner's customer resources. They must not grant access to admin operations, login/password/session security, OAuth credential management, or raw stored secrets. Any endpoint that returns such values must be excluded or redacted before it is documented for keys. Use only the existing scopes and subscription plan rules.
 
+## User-approved referral benefits and redeem codes
+
+- A referral counts only after the newly referred account is verified and successfully completes its first paid subscription. Persist qualification once per referred user so callback retries cannot count it twice.
+- Defaults: three qualified referrals earn one 30-day Starter reward; qualified progress carries forward. Admins can enable/pause the program and configure the threshold, reward plan (Starter/Silver/Gold), and reward duration. Do not issue legacy coins, cash, or discounts.
+- Keep earned referral rewards claimable and auditable. Claiming extends an existing Starter subscription or activates Starter; never silently downgrade an active higher plan.
+- Replace referral queries against the undeclared `referrals` relation with the existing `users.referred_by` relationship, and expose the current-origin share link and qualification/reward progress to the signed-in user.
+- Admin-created redeem codes select a canonical plan, duration, optional max uses, and optional expiry; admins can pause/revoke codes without deleting redemption history. Users redeem while signed in, at most once per account per code. Redemption must be atomic against use limits and must not silently downgrade a higher active plan.
+- Store only a normalized code hash, show the generated plaintext once to the creating admin, and audit creation, status changes, redemptions, reward grants, and reward claims.
+- Implement persistence in dedicated Drizzle models and an additive SQL migration; scope any eventual application strictly to the isolated `berahost` schema. Do not execute production DDL or update the live Manus deployment as part of the GitHub push.
+
+### Project structure for the approved benefit features
+
+- `lib/db/src/schema/referrals.ts` and `redeem_codes.ts`: qualified-referral/reward ledgers and code/redemption ledgers.
+- `artifacts/api-server/src/lib/referralRewards.ts`: idempotent qualification, reward progress, and claim handling.
+- `artifacts/api-server/src/routes/referrals.ts`: customer attribution/progress/claim and code redemption.
+- `artifacts/api-server/src/routes/admin.ts`: admin program settings and code create/list/pause/revoke APIs with audit logging.
+- `artifacts/berahost/src/pages/referrals.tsx` and `/redeem`: customer share/progress/claim and code-entry flows.
+- `artifacts/berahost/src/pages/admin/referrals.tsx`: program configuration and code management.
+- `lib/db/migrations`: additive isolated-schema migration; no production migration is run during this task.
+
 ## Trust and reliability improvement extension
 
 Implement in this order, beginning with referral attribution and then strengthening day-to-day operations. Referral links must prefill the code on registration, signup must persist owner attribution exactly once, and the program remains attribution-only unless the product owner defines a concrete plan benefit; do not issue legacy coin rewards. Add an operational health view with deployment state, uptime, restart/error context, and bot connectivity where the runtime exposes it; add safe web redeploy and last-successful-version rollback where existing build artifacts support it. Surface canonical plan limits, current usage and expiry from server data. Improve payment history/status, receipts and pending/failed-payment guidance using PayHero's real transaction state; do not claim renewal automation absent from backend behavior. Add a persistent onboarding checklist, a customer-visible audit/activity feed that excludes secrets, and a public service-status page based on checks the application can actually perform. Preserve the current BERAHOST design system and PostgreSQL schema/data boundaries; any schema changes must target the isolated `berahost` schema and must not modify `public`.

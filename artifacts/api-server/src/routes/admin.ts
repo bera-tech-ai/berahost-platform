@@ -13,6 +13,7 @@ import { addCoins } from "../lib/coins";
 import { hashSessionId } from "../lib/auth";
 import { stopWebDeployment } from "../lib/webProcess";
 
+import { qualifyReferrals } from "./referrals";
 const router = Router();
 
 // --- ADMIN STATS ---
@@ -942,6 +943,7 @@ router.post("/admin/users/:id/verify", requireAdmin, async (req, res): Promise<v
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 
   await db.update(usersTable).set({ isVerified: true }).where(eq(usersTable.id, id));
+  await qualifyReferrals(id);
 
   await db.insert(auditLogsTable).values({
     adminId: adminUser.id,

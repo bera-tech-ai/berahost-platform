@@ -4,6 +4,11 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
+const databaseSchema = process.env.BERAHOST_DATABASE_SCHEMA ?? "berahost";
+if (!/^[a-z_][a-z0-9_]*$/.test(databaseSchema) || databaseSchema === "public") {
+  throw new Error("BERAHOST_DATABASE_SCHEMA must be a valid non-public PostgreSQL schema name (default: berahost).");
+}
+
 const databaseUrl = process.env.BERAHOST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!databaseUrl) {
   throw new Error(
@@ -18,11 +23,15 @@ if (!databaseUrl) {
 // before they're killed externally.
 export const pool = new Pool({
   connectionString: databaseUrl,
+  options: `-c search_path=${databaseSchema}`,
   keepAlive: true,
   keepAliveInitialDelayMillis: 10_000,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
   max: 10,
+});
+await pool.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [databaseSchema]).then((result) => {
+  if (result.rowCount !== 1) throw new Error(`Required database schema '${databaseSchema}' is missing; refusing to use PostgreSQL fallback schemas.`);
 });
 export const db = drizzle(pool, { schema });
 
