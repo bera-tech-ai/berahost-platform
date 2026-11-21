@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { db, usersTable, coinTransactionsTable, vouchersTable, voucherRedemptionsTable, dailyClaimsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth, requireAny } from "../middlewares/requireAuth";
+import { requireAuth } from "../middlewares/requireAuth";
 import { addCoins } from "../lib/coins";
 import { sql } from "drizzle-orm";
 
 const router = Router();
 
-router.get("/coins/balance", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/coins/balance", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
 
@@ -34,7 +34,7 @@ router.get("/coins/balance", requireAny("read"), async (req, res): Promise<void>
   });
 });
 
-router.get("/coins/transactions", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/coins/transactions", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const txns = await db
     .select()
@@ -55,7 +55,7 @@ router.get("/coins/transactions", requireAny("read"), async (req, res): Promise<
   );
 });
 
-router.post("/coins/redeem", requireAny("payments"), async (req, res): Promise<void> => {
+router.post("/coins/redeem", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const { code } = req.body;
 
@@ -125,7 +125,7 @@ router.post("/coins/redeem", requireAny("payments"), async (req, res): Promise<v
   });
 });
 
-router.post("/coins/daily-claim", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/coins/daily-claim", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const today = new Date().toISOString().split("T")[0];
 

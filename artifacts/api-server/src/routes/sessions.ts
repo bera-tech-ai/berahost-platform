@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, deploymentsTable, sessionBackupsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAny } from "../middlewares/requireAuth";
+import { requireAuth } from "../middlewares/requireAuth";
 import fs from "fs";
 import path from "path";
 
@@ -11,7 +11,7 @@ function getSessionPath(deploymentId: number): string {
   return path.join(process.cwd(), "bot_sessions", String(deploymentId));
 }
 
-router.get("/deployments/:id/session-backups", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/deployments/:id/session-backups", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const deploymentId = parseInt(String(req.params.id));
 
@@ -38,7 +38,7 @@ router.get("/deployments/:id/session-backups", requireAny("read"), async (req, r
   );
 });
 
-router.post("/deployments/:id/session-backups", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/deployments/:id/session-backups", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const deploymentId = parseInt(String(req.params.id));
   const { label } = req.body;
@@ -87,7 +87,7 @@ router.post("/deployments/:id/session-backups", requireAny("write"), async (req,
   });
 });
 
-router.post("/deployments/:id/session-backups/:backupId/restore", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/deployments/:id/session-backups/:backupId/restore", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const deploymentId = parseInt(String(req.params.id));
   const backupId = parseInt(String(req.params.backupId));
@@ -121,7 +121,7 @@ router.post("/deployments/:id/session-backups/:backupId/restore", requireAny("wr
   }
 });
 
-router.delete("/deployments/:id/session-backups/:backupId", requireAny("write"), async (req, res): Promise<void> => {
+router.delete("/deployments/:id/session-backups/:backupId", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const deploymentId = parseInt(String(req.params.id));
   const backupId = parseInt(String(req.params.backupId));

@@ -8,6 +8,9 @@ declare module "express-session" {
   }
 }
 
+export type ApiKeyScope = "read" | "write" | "payments";
+const AVAILABLE_SCOPES: ApiKeyScope[] = ["read", "write", "payments"];
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.session.userId) {
     res.status(401).json({ error: "Unauthorized" });
@@ -34,22 +37,9 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
   });
 }
 
-/**
- * requireAny(scope)
- *
- * Accepts EITHER:
- *   - A valid browser session (cookie-based login), OR
- *   - A valid API key with the required scope sent as:
- *       x-api-key: bh_xxxxxxxxxxxx
- *       Authorization: Bearer bh_xxxxxxxxxxxx
- *
- * Scopes: "read" | "write" | "payments" | "admin"
- * A key with scope "admin" bypasses all scope checks.
- * A key with scope "write" also covers "read" on write endpoints (write ⊇ read).
- */
-export function requireAny(scope: "read" | "write" | "payments" | "admin") {
+/** Accept a browser session or an API key with the requested customer scope. */
+export function requireAny(scope: ApiKeyScope) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // ── 1. Session-based auth (browser login) ──────────────────────────────
     if (req.session.userId) {
       const user = await getUserById(req.session.userId);
       if (user && !user.isBanned) {
@@ -59,13 +49,9 @@ export function requireAny(scope: "read" | "write" | "payments" | "admin") {
       req.session.destroy(() => {});
     }
 
-    // ── 2. API key auth ────────────────────────────────────────────────────
-    const hasKey = req.headers["x-api-key"] || req.headers["authorization"]?.startsWith("Bearer bh_");
+    const hasKey = Boolean(req.headers["x-api-key"] || req.headers["authorization"]?.startsWith("Bearer bh_"));
     if (!hasKey) {
-      res.status(401).json({
-        error: "Unauthorized",
-        hint: "Send a session cookie or an API key via x-api-key header",
-      });
+      res.status(401).json({ error: "Unauthorized", hint: "Send a session cookie or an API key via x-api-key or Authorization: Bearer." });
       return;
     }
 
@@ -75,24 +61,13 @@ export function requireAny(scope: "read" | "write" | "payments" | "admin") {
       return;
     }
 
-    const keyRow = (req as any).apiKey;
-    const scopes: string[] = keyRow?.scopes ?? [];
-
-    // scope hierarchy: admin > payments/write > read
-    const allowed =
-      scopes.includes("admin") ||
-      scopes.includes(scope) ||
-      (scope === "read" && (scopes.includes("write") || scopes.includes("payments")));
-
+    const row = (req as any).apiKey;
+    const scopes: string[] = Array.isArray(row?.scopes) ? row.scopes.filter((value: unknown): value is ApiKeyScope => typeof value === "string" && AVAILABLE_SCOPES.includes(value as ApiKeyScope)) : [];
+    const allowed = scopes.includes(scope) || (scope === "read" && (scopes.includes("write") || scopes.includes("payments")));
     if (!allowed) {
-      res.status(403).json({
-        error: `API key does not have the required scope: "${scope}"`,
-        yourScopes: scopes,
-        availableScopes: ["read", "write", "payments", "admin"],
-      });
+      res.status(403).json({ error: `API key does not have the required scope: "${scope}"`, yourScopes: scopes, availableScopes: AVAILABLE_SCOPES });
       return;
     }
-
     next();
   };
 }

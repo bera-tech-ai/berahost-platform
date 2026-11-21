@@ -9,7 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { PaymentModal, PaymentMode } from "@/components/PaymentModal";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+const BASE = import.meta.env.BASE_URL;
+type CanonicalPlan = { id: string; name: string; priceKes: number; maxBots: number; maxWebApps: number; features?: string[] };
 
 const PLAN_DETAILS = [
   {
@@ -36,6 +39,15 @@ const PLAN_DETAILS = [
 export default function SubscriptionsPage() {
   const { data: user, isLoading: userLoading } = useGetMe();
   const { data: status, isLoading: statusLoading } = useGetSubscriptionStatus();
+  const { data: canonicalPlans = [], isLoading: plansLoading, isError: plansError } = useQuery<CanonicalPlan[]>({
+    queryKey: ["subscription-plan-catalog"],
+    queryFn: async () => {
+      const response = await fetch(`${BASE}api/subscriptions/plans`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not load plans");
+      return response.json();
+    },
+    staleTime: 60000,
+  });
   const qc = useQueryClient();
 
   const [payMode, setPayMode] = useState<PaymentMode | null>(null);
@@ -43,7 +55,7 @@ export default function SubscriptionsPage() {
   const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } };
   const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
 
-  if (statusLoading || userLoading) {
+  if (statusLoading || userLoading || plansLoading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-10 w-64 mb-2" /><Skeleton className="h-5 w-96" />
@@ -54,7 +66,11 @@ export default function SubscriptionsPage() {
     );
   }
 
-  const currentPlan = user?.subscriptionPlan || "free";
+  const currentPlan = status?.plan || user?.subscriptionPlan || "free";
+  const planCards = PLAN_DETAILS.map((local) => {
+    const canonical = canonicalPlans.find((plan) => plan.id === local.id);
+    return { ...local, name: canonical?.name ?? local.name, kes: canonical?.priceKes ?? 0, maxBots: canonical?.maxBots ?? 0, maxWebApps: canonical?.maxWebApps ?? 0, features: canonical?.features ?? [], available: Boolean(canonical) };
+  });
 
   return (
     <motion.div className="space-y-6" variants={container} initial="hidden" animate="show">
@@ -70,6 +86,8 @@ export default function SubscriptionsPage() {
         </p>
       </motion.div>
 
+      {plansError && <Card className="border-destructive/30 bg-destructive/5"><CardContent className="p-4 text-sm text-destructive">The current plan catalog could not be loaded. Prices and checkout are unavailable until the server catalog responds.</CardContent></Card>}
+
       {/* Current plan banner */}
       {currentPlan !== "free" && (
         <motion.div variants={item}>
@@ -82,7 +100,7 @@ export default function SubscriptionsPage() {
                 <div>
                    <h3 className="text-base font-semibold text-accent">Active plan: {currentPlan}</h3>
                   <p className="text-xs font-mono text-muted-foreground">
-                    {status?.expiresAt ? `Renews: ${new Date(status.expiresAt).toLocaleDateString()}` : "Active subscription"}
+                    {status?.expiresAt ? `Expires: ${new Date(status.expiresAt).toLocaleDateString()}` : "Active subscription"}
                   </p>
                 </div>
               </div>
@@ -95,7 +113,7 @@ export default function SubscriptionsPage() {
       )}
 
       <motion.div variants={item} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {PLAN_DETAILS.map((plan) => {
+        {planCards.map((plan) => {
           const isCurrent = currentPlan === plan.id;
           const isPopular = plan.id === "silver";
           const isFree = plan.id === "free";
@@ -130,14 +148,14 @@ export default function SubscriptionsPage() {
                   ) : (
                     <>
                       <span className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-white/60">
-                        {plan.kes}
+                        {plan.available ? plan.kes : "—"}
                       </span>
                       <span className="text-xs font-mono text-muted-foreground">KES/mo</span>
                     </>
                   )}
                 </div>
                 <CardDescription className="font-mono text-[10px] mt-1 text-primary/70">
-                  {plan.maxBots} hosted bot/web deployment{plan.maxBots !== 1 ? "s" : ""}
+                  {plan.maxBots} bot{plan.maxBots !== 1 ? "s" : ""} · {plan.maxWebApps} web app{plan.maxWebApps !== 1 ? "s" : ""}
                 </CardDescription>
               </CardHeader>
 
@@ -175,8 +193,8 @@ export default function SubscriptionsPage() {
                           ? "bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_15px_rgba(0,212,255,0.3)]"
                           : "bg-secondary/10 text-secondary hover:bg-secondary/20 border border-secondary/30"
                     }`}
-                    disabled={isCurrent}
-                    onClick={() => !isCurrent && setPayMode({
+                    disabled={isCurrent || !plan.available}
+                    onClick={() => !isCurrent && plan.available && setPayMode({
                       type: "subscription",
                       planId: plan.id,
                       name: plan.name,
@@ -202,8 +220,7 @@ export default function SubscriptionsPage() {
             <Zap className="h-4 w-4 text-primary" />
           </div>
           <div className="text-xs font-mono text-muted-foreground">
-            <strong className="text-foreground">How subscriptions work:</strong> Click Subscribe, enter your M-Pesa number, enter your PIN on the prompt. 
-            Your plan upgrades instantly. All payments via Safaricom M-Pesa — no card required.
+            <strong className="text-foreground">How subscriptions work:</strong> Click Subscribe, enter your M-Pesa number, and approve the prompt. Your plan updates after PayHero confirms payment; confirmation timing can vary. Payments use Safaricom M-Pesa.
           </div>
         </div>
       </motion.div>

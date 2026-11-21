@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, githubWebhooksTable, deploymentsTable, botsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAny } from "../middlewares/requireAuth";
+import { requireAny, requireAuth } from "../middlewares/requireAuth";
 import { stopBotProcess, startBotProcess } from "../lib/botProcess";
 import { decryptGithubToken, deleteGithubWebhook, getGithubIdentity, listGithubBranches, listGithubRepositories, managedGithubWebhookUrl, removeWebDeploymentWebhook, revokeGithubToken } from "../lib/github";
 import { redeployWebDeployment } from "../lib/webProcess";
@@ -33,7 +33,7 @@ router.get("/github/repos/branches", requireAny("read"), async (req, res): Promi
   catch (error: any) { res.status(502).json({ error: error?.message || "Unable to load repository branches." }); }
 });
 
-router.post("/github/disconnect", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/github/disconnect", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const token = decryptGithubToken(user.githubAccessTokenEncrypted);
   const deployments = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id));
@@ -47,7 +47,7 @@ function generateWebhookSecret(): string {
   return crypto.randomBytes(20).toString("hex");
 }
 
-router.get("/github/webhooks", requireAny("read"), async (req, res): Promise<void> => {
+router.get("/github/webhooks", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const hooks = await db.select().from(githubWebhooksTable).where(eq(githubWebhooksTable.userId, user.id));
 
@@ -67,7 +67,7 @@ router.get("/github/webhooks", requireAny("read"), async (req, res): Promise<voi
   );
 });
 
-router.post("/github/webhooks", requireAny("write"), async (req, res): Promise<void> => {
+router.post("/github/webhooks", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const { deploymentId, repoUrl, branch } = req.body;
 
@@ -106,7 +106,7 @@ router.post("/github/webhooks", requireAny("write"), async (req, res): Promise<v
   });
 });
 
-router.delete("/github/webhooks/:id", requireAny("write"), async (req, res): Promise<void> => {
+router.delete("/github/webhooks/:id", requireAuth, async (req, res): Promise<void> => {
   const user = (req as any).user;
   const hookId = parseInt(String(req.params.id));
 

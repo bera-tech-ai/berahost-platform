@@ -33,17 +33,23 @@ export default function Register() {
   const { toast } = useToast();
   const { refetch } = useGetMe({ query: { enabled: false, queryKey: getGetMeQueryKey() } });
   const [showPassword, setShowPassword] = useState(false);
+  const referralCodeFromLink = new URLSearchParams(window.location.search).get("ref")?.trim().toUpperCase() ?? "";
 
   const registerForm = useForm<RegisterForm>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { email: "", password: "", phone: "", referralCode: "" },
+    defaultValues: { email: "", password: "", phone: "", referralCode: referralCodeFromLink },
   });
 
   const registerMutation = useRegister({
     mutation: {
       onSuccess: async () => {
         await refetch();
-        toast({ title: "Account created", description: "Welcome to your BERAHOST workspace." });
+        toast({
+          title: "Account created",
+          description: registerForm.getValues("referralCode")
+            ? "Welcome to BERAHOST. Your referral was recorded for attribution."
+            : "Welcome to your BERAHOST workspace.",
+        });
         setLocation("/dashboard");
       },
       onError: (error) => {
@@ -169,9 +175,12 @@ export default function Register() {
                   name="referralCode"
                   render={({ field }) => (
                     <FormItem>
-                       <FormLabel className="text-sm text-muted-foreground">
+                        <FormLabel className="text-sm text-muted-foreground">
                          Referral code <span className="text-muted-foreground/60">(optional)</span>
                       </FormLabel>
+                      {referralCodeFromLink && (
+                        <p className="text-xs text-primary/80">Referral code loaded from your invite link. It records attribution only.</p>
+                      )}
                       <FormControl>
                         <Input
                            data-testid="input-register-referral" placeholder="Enter a code if you have one"

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import {
   Sparkles,
   Terminal,
   TriangleAlert,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -57,6 +58,8 @@ type Project = {
   kind: "bot" | "web";
 };
 
+type PlanStatus = { plan: string; planDetails?: { name?: string; maxBots?: number; maxWebApps?: number }; expiresAt: string | null; isActive: boolean };
+
 function statusTone(status: string) {
   if (status === "running") return "border-accent/30 bg-accent/10 text-accent";
   if (["queued", "building", "deploying", "starting"].includes(status)) return "border-primary/30 bg-primary/10 text-primary";
@@ -87,37 +90,8 @@ function relativeTime(value?: string) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function SignalChart({ running, building, failed }: { running: number; building: number; failed: number }) {
-  const points = [
-    38 + running * 5,
-    48 + building * 5,
-    30 + running * 4,
-    52 + failed * 8,
-    34 + running * 5,
-    44 + building * 7,
-    27 + running * 4,
-    39 + failed * 7,
-  ].map((point) => Math.min(82, point));
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${index * 43 + 10} ${point}`).join(" ");
-  const area = `${path} L 311 104 L 10 104 Z`;
-
-  return (
-    <svg viewBox="0 0 321 112" className="h-28 w-full overflow-visible" role="img" aria-label="Current project activity signal">
-      <defs>
-        <linearGradient id="signal-fill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0" stopColor="hsl(var(--primary))" stopOpacity=".28" />
-          <stop offset="1" stopColor="hsl(var(--primary))" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {[22, 50, 78, 104].map((y) => <line key={y} x1="0" x2="321" y1={y} y2={y} stroke="hsl(var(--border))" strokeOpacity=".45" strokeDasharray="3 5" />)}
-      <path d={area} fill="url(#signal-fill)" />
-      <path d={path} fill="none" stroke="hsl(var(--primary))" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
-      <path d="M 10 91 C 48 82, 81 90, 123 83 S 208 92, 311 78" fill="none" stroke="hsl(var(--destructive))" strokeLinecap="round" strokeWidth="1.7" strokeOpacity=".75" />
-    </svg>
-  );
-}
-
 export default function Dashboard() {
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const { data: user, isLoading: userLoading } = useGetMe();
   const { data: deployments, isLoading: deploymentsLoading } = useListDeployments();
   const { data: bots, isLoading: botsLoading } = useListBots();
@@ -130,6 +104,18 @@ export default function Dashboard() {
     },
     refetchInterval: 15000,
   });
+  const { data: planStatus } = useQuery<PlanStatus>({
+    queryKey: ["dashboard-plan-status"],
+    queryFn: async () => {
+      const response = await fetch(`${BASE}api/subscriptions/status`, { credentials: "include" });
+      if (!response.ok) throw new Error("Unable to load plan status");
+      return response.json();
+    },
+    refetchInterval: 30000,
+  });
+  useEffect(() => {
+    if (user?.id) setOnboardingDismissed(localStorage.getItem(`berahost:onboarding-dismissed:${user.id}`) === "true");
+  }, [user?.id]);
 
   const projects = useMemo<Project[]>(() => {
     const botProjects = (deployments ?? []).map((deployment: any) => ({
@@ -158,8 +144,18 @@ export default function Dashboard() {
   const building = projects.filter((project) => ["queued", "building", "deploying", "starting"].includes(project.status)).length;
   const failed = projects.filter((project) => ["failed", "crashed"].includes(project.status)).length;
   const total = projects.length;
-  const healthyRatio = total ? Math.round(((total - failed) / total) * 100) : 100;
+  const runningRatio = total ? Math.round((running / total) * 100) : 0;
   const isLoading = userLoading || deploymentsLoading || botsLoading || webLoading;
+  const botLimit = planStatus?.planDetails?.maxBots ?? 0;
+  const webLimit = planStatus?.planDetails?.maxWebApps ?? 0;
+  const botsUsed = deployments?.length ?? 0;
+  const webUsed = webDeployments.length;
+  const onboardingItems = [
+    { label: "Choose an active hosting plan", done: Boolean(planStatus?.isActive), href: "/subscriptions" },
+    { label: "Create your first deployment", done: total > 0, href: "/bots" },
+    { label: "Verify a deployment is running", done: running > 0, href: "/deployments" },
+  ];
+  const onboardingComplete = onboardingItems.every((item) => item.done);
 
   if (isLoading) {
     return (
@@ -206,18 +202,18 @@ export default function Dashboard() {
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Card className="soft-card overflow-hidden">
           <CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4">
-            <div><CardTitle className="flex items-center gap-2 text-base"><Activity className="h-4 w-4 text-primary" /> System overview</CardTitle><p className="mt-1 text-xs text-muted-foreground">A live signal from your current bot and web runtimes.</p></div>
-            <Badge variant="outline" className={failed ? "border-destructive/30 text-destructive" : "border-accent/30 text-accent"}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${failed ? "bg-destructive" : "bg-accent shadow-[0_0_8px_hsl(var(--accent))]"}`} />{failed ? "Attention required" : "All systems operational"}</Badge>
+            <div><CardTitle className="flex items-center gap-2 text-base"><Activity className="h-4 w-4 text-primary" /> System overview</CardTitle><p className="mt-1 text-xs text-muted-foreground">A snapshot of the latest statuses returned for your deployments.</p></div>
+            <Badge variant="outline" className={failed ? "border-destructive/30 text-destructive" : "border-accent/30 text-accent"}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${failed ? "bg-destructive" : "bg-accent shadow-[0_0_8px_hsl(var(--accent))]"}`} />{failed ? "Attention required" : running ? "Deployments running" : total ? "No deployments running" : "No deployments yet"}</Badge>
           </CardHeader>
           <CardContent className="grid gap-6 p-5 lg:grid-cols-[1fr_210px]">
-            <div><SignalChart running={running} building={building} failed={failed} /><div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-primary" />Active signal</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-destructive" />Error signal</span></div></div>
-            <div className="rounded-xl border border-border/60 bg-background/35 p-4"><div className="mb-4 flex items-center justify-between"><span className="text-xs text-muted-foreground">Project health</span><span className="font-mono text-xl font-semibold text-primary">{healthyRatio}%</span></div><div className="space-y-3 text-xs"><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-accent">{running}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-accent" style={{ width: `${total ? (running / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Building</span><span className="font-mono text-primary">{building}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-primary" style={{ width: `${total ? (building / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Failed</span><span className="font-mono text-destructive">{failed}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-destructive" style={{ width: `${total ? (failed / total) * 100 : 0}%` }} /></div></div></div></div>
+            <div className="grid gap-3 sm:grid-cols-2">{[{ label: "Running", value: running, color: "bg-accent" }, { label: "Building", value: building, color: "bg-primary" }, { label: "Failed", value: failed, color: "bg-destructive" }, { label: "Stopped / other", value: Math.max(0, total - running - building - failed), color: "bg-muted-foreground/60" }].map((item) => <div key={item.label} className="rounded-xl border border-border/60 bg-background/35 p-4"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{item.label}</span><span className="font-mono text-xl font-semibold">{item.value}</span></div><div className="mt-3 h-1.5 rounded-full bg-muted/50"><div className={`h-full rounded-full ${item.color}`} style={{ width: `${total ? (item.value / total) * 100 : 0}%` }} /></div></div>)}</div>
+            <div className="rounded-xl border border-border/60 bg-background/35 p-4"><div className="mb-4 flex items-center justify-between"><span className="text-xs text-muted-foreground">Running now</span><span className="font-mono text-xl font-semibold text-primary">{runningRatio}%</span></div><div className="space-y-3 text-xs"><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-accent">{running}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-accent" style={{ width: `${total ? (running / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Building</span><span className="font-mono text-primary">{building}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-primary" style={{ width: `${total ? (building / total) * 100 : 0}%` }} /></div></div><div><div className="mb-1 flex justify-between"><span className="text-muted-foreground">Failed</span><span className="font-mono text-destructive">{failed}</span></div><div className="h-1.5 rounded-full bg-muted/50"><div className="h-full rounded-full bg-destructive" style={{ width: `${total ? (failed / total) * 100 : 0}%` }} /></div></div></div></div>
           </CardContent>
         </Card>
 
         <Card className="soft-card overflow-hidden">
-          <CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4"><div><CardTitle className="text-base">Workspace health</CardTitle><p className="mt-1 text-xs text-muted-foreground">Entitlement and runtime readiness.</p></div><div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-primary/25 border-t-primary text-sm font-semibold text-primary">{healthyRatio}%</div></CardHeader>
-          <CardContent className="space-y-4 p-5"><div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent/5 p-3"><CheckCircle2 className="h-5 w-5 shrink-0 text-accent" /><div><p className="text-sm font-medium">API and workspace online</p><p className="text-xs text-muted-foreground">Live status is available from each deployment.</p></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-border/60 bg-background/35 p-3"><HardDrive className="h-4 w-4 text-secondary" /><p className="mt-2 text-lg font-semibold">{user?.subscriptionPlan || "free"}</p><p className="text-[11px] text-muted-foreground">Current plan</p></div><div className="rounded-xl border border-border/60 bg-background/35 p-3"><Server className="h-4 w-4 text-primary" /><p className="mt-2 text-lg font-semibold">{running}/{total || 0}</p><p className="text-[11px] text-muted-foreground">Live projects</p></div></div><Link href="/subscriptions" className="flex items-center justify-between text-xs text-primary hover:underline">Review subscription <ArrowUpRight className="h-3.5 w-3.5" /></Link></CardContent>
+          <CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4"><div><CardTitle className="text-base">Workspace health</CardTitle><p className="mt-1 text-xs text-muted-foreground">Entitlement and runtime readiness.</p></div><div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-primary/25 border-t-primary text-sm font-semibold text-primary">{runningRatio}%</div></CardHeader>
+          <CardContent className="space-y-4 p-5"><div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent/5 p-3"><CheckCircle2 className="h-5 w-5 shrink-0 text-accent" /><div><p className="text-sm font-medium">Workspace snapshot loaded</p><p className="text-xs text-muted-foreground">Counts reflect saved deployment statuses, not historical uptime.</p></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-border/60 bg-background/35 p-3"><HardDrive className="h-4 w-4 text-secondary" /><p className="mt-2 text-lg font-semibold">{user?.subscriptionPlan || "free"}</p><p className="text-[11px] text-muted-foreground">Current plan</p></div><div className="rounded-xl border border-border/60 bg-background/35 p-3"><Server className="h-4 w-4 text-primary" /><p className="mt-2 text-lg font-semibold">{running}/{total || 0}</p><p className="text-[11px] text-muted-foreground">Live projects</p></div></div><Link href="/subscriptions" className="flex items-center justify-between text-xs text-primary hover:underline">Review subscription <ArrowUpRight className="h-3.5 w-3.5" /></Link></CardContent>
         </Card>
       </section>
 
@@ -229,6 +225,11 @@ export default function Dashboard() {
 
         <Card className="soft-card overflow-hidden"><CardHeader className="border-b border-border/60 pb-4"><CardTitle className="text-base">Quick actions</CardTitle><p className="mt-1 text-xs text-muted-foreground">Common next steps for your workspace.</p></CardHeader><CardContent className="grid grid-cols-2 gap-3 p-4"><Link href="/bots"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-primary/50 hover:bg-primary/5"><Bot className="h-5 w-5 text-primary" /><span className="text-xs">New bot</span></Button></Link><Link href="/web-deployments"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-secondary/50 hover:bg-secondary/5"><Globe2 className="h-5 w-5 text-secondary" /><span className="text-xs">New website</span></Button></Link><Link href="/deployments"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-accent/50 hover:bg-accent/5"><Terminal className="h-5 w-5 text-accent" /><span className="text-xs">View logs</span></Button></Link><Link href="/settings"><Button variant="outline" className="h-auto w-full flex-col gap-2 border-border/60 py-4 hover:border-chart-5/50 hover:bg-chart-5/5"><LayoutDashboard className="h-5 w-5 text-chart-5" /><span className="text-xs">Workspace settings</span></Button></Link></CardContent></Card>
       </section>
+
+      {planStatus && <section className="grid gap-5 xl:grid-cols-2">
+        <Card className="soft-card border-primary/20"><CardHeader className="border-b border-border/60 pb-4"><CardTitle className="text-base">Plan usage</CardTitle><p className="mt-1 text-xs text-muted-foreground">{planStatus.planDetails?.name || planStatus.plan} · {planStatus.isActive ? "Active" : "Inactive"}{planStatus.expiresAt ? ` · Expires ${new Date(planStatus.expiresAt).toLocaleDateString()}` : ""}</p></CardHeader><CardContent className="grid gap-4 p-5 sm:grid-cols-2">{[{ label: "Bots", used: botsUsed, limit: botLimit }, { label: "Web apps", used: webUsed, limit: webLimit }].map(({ label, used, limit }) => <div key={label} className="rounded-xl border border-border/60 bg-background/35 p-4"><div className="flex items-center justify-between text-sm"><span>{label}</span><span className="font-mono">{used} / {limit}</span></div><div className="mt-3 h-2 rounded-full bg-muted/60"><div className="h-full rounded-full bg-primary" style={{ width: `${limit ? Math.min(100, used / limit * 100) : 0}%` }} /></div><p className="mt-2 text-[11px] text-muted-foreground">{Math.max(0, limit - used)} available on this plan</p></div>)}</CardContent></Card>
+        {!onboardingDismissed && !onboardingComplete && <Card className="soft-card border-secondary/20"><CardHeader className="flex flex-row items-start justify-between border-b border-border/60 pb-4"><div><CardTitle className="text-base">Workspace setup</CardTitle><p className="mt-1 text-xs text-muted-foreground">A short checklist based on your account and deployment state.</p></div><Button variant="ghost" size="icon" aria-label="Dismiss setup checklist" onClick={() => { if (user?.id) localStorage.setItem(`berahost:onboarding-dismissed:${user.id}`, "true"); setOnboardingDismissed(true); }}><X className="h-4 w-4" /></Button></CardHeader><CardContent className="space-y-2 p-4">{onboardingItems.map((item) => <Link key={item.label} href={item.href} className="flex items-center gap-3 rounded-lg border border-border/50 p-3 text-sm hover:bg-white/[0.03]"><CheckCircle2 className={`h-4 w-4 ${item.done ? "text-accent" : "text-muted-foreground/50"}`} /><span className={item.done ? "text-muted-foreground line-through" : ""}>{item.label}</span>{!item.done && <ArrowUpRight className="ml-auto h-3.5 w-3.5 text-primary" />}</Link>)}</CardContent></Card>}
+      </section>}
 
       {failed > 0 && <Link href="/deployments" className="flex items-center gap-3 rounded-xl border border-destructive/25 bg-destructive/5 p-4 text-sm transition-colors hover:bg-destructive/10"><TriangleAlert className="h-5 w-5 text-destructive" /><span className="flex-1"><strong>{failed} project{failed === 1 ? "" : "s"} need attention.</strong> Open the deployment console to inspect logs and recover.</span><ChevronRight className="h-4 w-4 text-destructive" /></Link>}
     </motion.div>

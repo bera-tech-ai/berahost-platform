@@ -30,6 +30,7 @@ router.get("/teams", requireAny("read"), async (req, res): Promise<void> => {
 
   const result = await Promise.all(
     all.map(async (team) => {
+      const apiKeyRequest = Boolean((req as any).apiKey);
       const members = await db.select().from(teamMembersTable).where(eq(teamMembersTable.teamId, team.id));
       const memberDetails = await Promise.all(
         members.map(async (m) => {
@@ -41,12 +42,12 @@ router.get("/teams", requireAny("read"), async (req, res): Promise<void> => {
         id: team.id,
         name: team.name,
         ownerId: team.ownerId,
-        inviteCode: team.ownerId === user.id ? team.inviteCode : undefined,
+        inviteCode: !apiKeyRequest && team.ownerId === user.id ? team.inviteCode : undefined,
         isOwner: team.ownerId === user.id,
         members: memberDetails.map((m) => ({
           id: m.id,
           userId: m.userId,
-          email: m.email,
+          ...(!apiKeyRequest ? { email: m.email } : {}),
           role: m.role,
           canDeploy: m.canDeploy,
           canViewLogs: m.canViewLogs,

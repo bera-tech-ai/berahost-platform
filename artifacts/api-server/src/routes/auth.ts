@@ -1,12 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
 import crypto from "crypto";
-import { db, usersTable, coinTransactionsTable, auditLogsTable, platformSettingsTable, otpCodesTable } from "@workspace/db";
+import { db, usersTable, auditLogsTable, otpCodesTable } from "@workspace/db";
 import { eq, sql, and, gt } from "drizzle-orm";
 import { hashPassword, comparePassword, generateReferralCode, serializeUser } from "../lib/auth";
 import { requireAuth } from "../middlewares/requireAuth";
 import { requireAdmin } from "../middlewares/requireAdmin";
-import { addCoins } from "../lib/coins";
 import { sendWhatsAppMessage, getWASenderStatus } from "../lib/waSender";
 import { encryptGithubToken, exchangeGithubCode, getGithubIdentity, githubCallbackUrl, githubConfigured, publicBaseUrl } from "../lib/github";
 import { exchangeGoogleCode, getGoogleIdentity, googleAuthorizationUrl, googleCallbackUrl, googleConfigured, googleState } from "../lib/google";
@@ -142,7 +141,8 @@ router.post("/auth/otp/reset-password", async (req, res): Promise<void> => {
 // ── REGISTER ──────────────────────────────────────────────────────────────────
 
 router.post("/auth/register", async (req, res): Promise<void> => {
-  const { email, password, phone, referralCode } = req.body;
+  const { email, password, phone } = req.body;
+  const referralCode = typeof req.body?.referralCode === "string" ? req.body.referralCode.trim().toUpperCase() : "";
 
   if (!email || !password) {
     res.status(400).json({ error: "Email and password are required" });
@@ -166,45 +166,34 @@ router.post("/auth/register", async (req, res): Promise<void> => {
   let referredById: number | null = null;
   if (referralCode) {
     const [referrer] = await db
-      .select()
+      .select({ id: usersTable.id })
       .from(usersTable)
       .where(eq(usersTable.referralCode, referralCode));
-    if (referrer) {
-      referredById = referrer.id;
+    if (!referrer) {
+      res.status(400).json({ error: "Invalid referral code. Check the link or remove the code to continue." });
+      return;
     }
+    referredById = referrer.id;
   }
 
-  // Read signup coins from platform settings (admin-configurable), default 10
-  const [signupSetting] = await db
-    .select()
-    .from(platformSettingsTable)
-    .where(eq(platformSettingsTable.key, "signup_coins"));
-  const signupCoins = signupSetting ? Number(signupSetting.value) || 10 : 10;
+  const user = await db.transaction(async (tx) => {
+    const [createdUser] = await tx
+      .insert(usersTable)
+      .values({
+        email,
+        passwordHash,
+        phone: phone ?? null,
+        coins: 0,
+        referralCode: myReferralCode,
+        referredBy: referredById,
+      })
+      .returning();
 
-  const [user] = await db
-    .insert(usersTable)
-    .values({
-      email,
-      passwordHash,
-      phone: phone ?? null,
-      coins: signupCoins,
-      referralCode: myReferralCode,
-      referredBy: referredById,
-    })
-    .returning();
-
-  // Welcome bonus
-  await db.insert(coinTransactionsTable).values({
-    userId: user.id,
-    amount: signupCoins,
-    type: "gift",
-    reference: "Welcome bonus",
+    if (referredById !== null) {
+      await tx.execute(sql`INSERT INTO referrals (referrer_id, referred_id, coins_awarded) VALUES (${referredById}, ${createdUser.id}, 0)`);
+    }
+    return createdUser;
   });
-
-  // Referral reward
-  if (referredById) {
-    await addCoins(referredById, 30, "referral", `Referred ${email}`);
-  }
 
   req.session.userId = user.id;
 

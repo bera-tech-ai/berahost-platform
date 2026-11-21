@@ -5,7 +5,7 @@ Replace coin-based access with monthly Starter, Silver, and Gold subscriptions f
 
 ## Implementation approach
 - Keep the existing bot process, WhatsApp session backup, Socket.IO logs, and bot template/env scanning paths intact; remove coins from deployment eligibility and user-facing navigation.
-- Create one canonical subscription catalog: Starter KES 200 / 5 bots, Silver KES 500 / 13 bots, Gold KES 800 / 30 bots, each for 30 days. PayHero callbacks extend expiry from the later of now or current expiry.
+- Use `artifacts/api-server/src/lib/subscriptions.ts` as the canonical runtime catalog: Starter KES 70/month (1 bot + 1 web app; 2 total deployments), Silver KES 500/month (up to 13 bots + 13 web apps; 26 total deployments), and Gold KES 800/month (up to 30 bots + 30 web apps; 60 total deployments), each for 30 days. PayHero callbacks extend expiry from the later of now or current expiry.
 - Centralize entitlement checks for create/start/restore/restart and run an expiry reconciler that stops processes but retains deployment records and web project metadata for later renewal.
 - Add a separate `web_deployments` model and runtime service. Clone a validated public GitHub URL, scan package/env configuration, run a build when configured, serve static output or proxy a Node process, and expose a unique `/web/<slug>` URL. Do not route web projects through the bot deployment tables.
 - Add custom-domain orders at KES 134 through PayHero, with verification-token and paid/active states. A domain becomes routable when paid and verified; DNS/TLS remains platform/provider controlled.
@@ -82,3 +82,30 @@ GitHub OAuth requires an OAuth App callback URL of `https://berahost-bfer3udn.ma
 ## Google sign-in extension
 
 Add Google OAuth as a second external sign-in provider while preserving password and GitHub login. Use server-side authorization-code exchange with `openid email profile`, validate the returned verified email, match an existing BERAHOST account by Google subject or email, and create a new account with a generated password hash when no match exists. Store only the Google subject and avatar metadata; never store or expose Google access tokens. Bind OAuth state to the existing session, use the fixed public callback URL `https://berahost-bfer3udn.manus.space/api/auth/google/callback`, and keep return paths limited to internal application routes.
+
+
+## API-key developer platform extension
+
+Expand API keys to cover the customer-owned BERAHOST core: bot catalog and deployments, web deployments, customer marketplace submissions, plan catalog/status, customer subscription payments and payment history/status, owned logs/metrics, support tickets, notifications, teams, referrals, scheduled restarts, GitHub repository discovery where the account is already connected, and self-service API-key management. Use the existing `read`, `write`, and `payments` scopes with one documented hierarchy; enforce the required scope in every protected route, and retain owner checks for all customer resources.
+
+Use the existing canonical plans and entitlement checks. API-key calls execute as the key owner and must not bypass subscription status or deployment capacity limits. Do not invent API-request quotas or new plan features; expose plan details from the server catalog rather than duplicating plan facts in the guide.
+
+Exclude admin operations, login/password/session-security operations, session backup/restore and pairing codes, OAuth credential management, provider callbacks, raw stored secrets, legacy coin routes/rewards, the public cross-customer leaderboard, and obsolete payment endpoints. Do not return raw environment values, webhook secrets, invitation credentials, or credential-bearing log content in API-key responses. Preserve customer ownership boundaries.
+
+### Implementation approach and project structure
+
+- `artifacts/api-server/src/middlewares/requireAuth.ts` and `middlewares/requireApiKey.ts`: central scope hierarchy and explicit session-versus-key authorization.
+- `artifacts/api-server/src/routes`: apply the intended read/write/payments guard to every approved customer route; enable key access for safe customer endpoints currently restricted to sessions; keep sensitive and administrative routes unavailable to keys.
+- `artifacts/api-server/src/lib/subscriptions.ts`: remain the canonical source for plan data and entitlements; existing plan gates remain authoritative.
+- `artifacts/berahost/src/pages/api-keys.tsx`: show the approved scope, complete endpoint guide, setup/examples, plan behavior, error guidance, and secret-handling rules without coin claims.
+- `lib/api-spec/openapi.yaml`: match the supported customer API surface, authentication, scopes, and safe response shapes; remove obsolete coin/payment descriptions from the developer contract.
+
+### User-approved security boundary
+
+Customer API keys may access only the key owner's customer resources. They must not grant access to admin operations, login/password/session security, OAuth credential management, or raw stored secrets. Any endpoint that returns such values must be excluded or redacted before it is documented for keys. Use only the existing scopes and subscription plan rules.
+
+## Trust and reliability improvement extension
+
+Implement in this order, beginning with referral attribution and then strengthening day-to-day operations. Referral links must prefill the code on registration, signup must persist owner attribution exactly once, and the program remains attribution-only unless the product owner defines a concrete plan benefit; do not issue legacy coin rewards. Add an operational health view with deployment state, uptime, restart/error context, and bot connectivity where the runtime exposes it; add safe web redeploy and last-successful-version rollback where existing build artifacts support it. Surface canonical plan limits, current usage and expiry from server data. Improve payment history/status, receipts and pending/failed-payment guidance using PayHero's real transaction state; do not claim renewal automation absent from backend behavior. Add a persistent onboarding checklist, a customer-visible audit/activity feed that excludes secrets, and a public service-status page based on checks the application can actually perform. Preserve the current BERAHOST design system and PostgreSQL schema/data boundaries; any schema changes must target the isolated `berahost` schema and must not modify `public`.
+
+Prefer existing runtime metrics, payment, notification, audit and plan endpoints. Add only the minimum persistence needed for customer activity or incident history, and do not invent SLAs, automated monitoring, payment guarantees, referral rewards, or request quotas.

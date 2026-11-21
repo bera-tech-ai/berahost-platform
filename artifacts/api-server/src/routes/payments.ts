@@ -2,7 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import { db, paymentTransactionsTable, usersTable, platformSettingsTable, domainOrdersTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
-import { requireAny } from "../middlewares/requireAuth";
+import { requireAny, requireAuth } from "../middlewares/requireAuth";
 import { logger } from "../lib/logger";
 import { sql } from "drizzle-orm";
 import { SUBSCRIPTION_PLANS, subscriptionExpiryFrom } from "../lib/subscriptions";
@@ -55,8 +55,8 @@ async function createPayheroPayment(userId: number, phone: string, amountKes: nu
 router.get("/payments/plans", async (_req, res): Promise<void> => {
   res.json({ subscriptionPlans: Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxBots, webLimit: plan.maxWebApps })) });
 });
-router.post("/payments/initiate", requireAny("payments"), async (_req, res): Promise<void> => {
-  res.status(410).json({ error: "Coin purchases have been removed. Choose a monthly subscription instead." });
+router.post("/payments/initiate", requireAuth, async (_req, res): Promise<void> => {
+  res.status(410).json({ error: "This endpoint is deprecated. Use /payments/subscribe or /payments/domain for current PayHero payments." });
 });
 
 router.post("/payments/subscribe", requireAny("payments"), async (req, res): Promise<void> => {

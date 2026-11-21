@@ -3,7 +3,7 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: BERAHOST API specification
+  description: BERAHOST API specification. Customer API-key access is only available for explicitly marked customer-owned endpoints; authentication, admin, callback, session and excluded legacy operations are not accessible with API keys.
 servers:
   - url: /api
     description: Base API path
@@ -28,6 +28,8 @@ tags:
     description: Support tickets
   - name: apikeys
     description: API key management
+  - name: customer-api
+    description: Customer-owned operations available to API keys
   - name: notifications
     description: Notifications
 
@@ -35,6 +37,9 @@ paths:
   /healthz:
     get:
       operationId: healthCheck
+      x-api-key-accessible: false
+      x-api-key-access: Public; API key not required
+      security: []
       tags: [health]
       summary: Health check
       responses:
@@ -49,6 +54,9 @@ paths:
   /auth/register:
     post:
       operationId: register
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Register new account
       requestBody:
@@ -74,6 +82,9 @@ paths:
   /auth/login:
     post:
       operationId: login
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Login
       requestBody:
@@ -99,6 +110,9 @@ paths:
   /auth/me:
     get:
       operationId: getMe
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Get current user
       responses:
@@ -118,6 +132,9 @@ paths:
   /auth/profile:
     put:
       operationId: updateProfile
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Update display name, avatar, and phone
       requestBody:
@@ -143,6 +160,9 @@ paths:
   /auth/change-password:
     post:
       operationId: changePassword
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Change password
       requestBody:
@@ -174,6 +194,9 @@ paths:
   /auth/logout:
     post:
       operationId: logout
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [auth]
       summary: Logout
       responses:
@@ -188,6 +211,9 @@ paths:
   /bots:
     get:
       operationId: listBots
+      x-api-key-accessible: false
+      x-api-key-access: Public; API key not required
+      security: []
       tags: [bots]
       summary: List all available bots
       responses:
@@ -203,6 +229,9 @@ paths:
   /bots/{id}:
     get:
       operationId: getBot
+      x-api-key-accessible: false
+      x-api-key-access: Public; API key not required
+      security: []
       tags: [bots]
       summary: Get bot details
       parameters:
@@ -229,6 +258,11 @@ paths:
   /deployments:
     get:
       operationId: listDeployments
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: List user's deployments
       responses:
@@ -242,6 +276,11 @@ paths:
                   $ref: "#/components/schemas/Deployment"
     post:
       operationId: createDeployment
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Deploy new bot
       requestBody:
@@ -267,6 +306,11 @@ paths:
   /deployments/{id}:
     get:
       operationId: getDeployment
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Get deployment details
       parameters:
@@ -290,6 +334,11 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
     delete:
       operationId: deleteDeployment
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Delete deployment
       parameters:
@@ -309,6 +358,11 @@ paths:
   /deployments/{id}/start:
     post:
       operationId: startDeployment
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Start stopped bot
       parameters:
@@ -328,6 +382,11 @@ paths:
   /deployments/{id}/stop:
     post:
       operationId: stopDeployment
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Stop running bot
       parameters:
@@ -347,6 +406,11 @@ paths:
   /deployments/{id}/env:
     put:
       operationId: updateDeploymentEnv
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Update deployment env vars (SESSION_ID locked)
       parameters:
@@ -378,6 +442,11 @@ paths:
   /deployments/{id}/logs:
     get:
       operationId: getDeploymentLogs
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [deployments]
       summary: Get recent deployment logs
       parameters:
@@ -404,6 +473,9 @@ paths:
   /coins/balance:
     get:
       operationId: getCoinBalance
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [coins]
       summary: Get user coin balance
       responses:
@@ -417,6 +489,9 @@ paths:
   /coins/transactions:
     get:
       operationId: listCoinTransactions
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [coins]
       summary: List coin transaction history
       responses:
@@ -432,6 +507,9 @@ paths:
   /coins/redeem:
     post:
       operationId: redeemVoucher
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [coins]
       summary: Redeem gift code or voucher
       requestBody:
@@ -457,6 +535,9 @@ paths:
   /coins/daily-claim:
     post:
       operationId: claimDailyBonus
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [coins]
       summary: Claim daily bonus coins
       responses:
@@ -477,6 +558,9 @@ paths:
   /payments/initiate:
     post:
       operationId: initiatePayment
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [payments]
       summary: Initiate STK push payment
       requestBody:
@@ -502,6 +586,9 @@ paths:
   /payments/callback:
     post:
       operationId: paymentCallback
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [payments]
       summary: PayHero webhook callback
       requestBody:
@@ -521,6 +608,11 @@ paths:
   /payments/history:
     get:
       operationId: listPayments
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [payments]
       summary: List payment history
       responses:
@@ -537,6 +629,9 @@ paths:
   /subscriptions/plans:
     get:
       operationId: listSubscriptionPlans
+      x-api-key-accessible: false
+      x-api-key-access: Public; API key not required
+      security: []
       tags: [subscriptions]
       summary: List available subscription plans
       responses:
@@ -552,6 +647,11 @@ paths:
   /subscriptions/status:
     get:
       operationId: getSubscriptionStatus
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [subscriptions]
       summary: Get current subscription
       responses:
@@ -565,6 +665,9 @@ paths:
   /subscriptions/subscribe:
     post:
       operationId: subscribeToPlan
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [subscriptions]
       summary: Subscribe to plan
       requestBody:
@@ -585,6 +688,11 @@ paths:
   /notifications:
     get:
       operationId: listNotifications
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [notifications]
       summary: List user notifications
       responses:
@@ -600,6 +708,11 @@ paths:
   /notifications/{id}/read:
     post:
       operationId: markNotificationRead
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [notifications]
       summary: Mark notification as read
       parameters:
@@ -620,6 +733,11 @@ paths:
   /support/tickets:
     get:
       operationId: listSupportTickets
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [support]
       summary: List user's support tickets
       responses:
@@ -633,6 +751,11 @@ paths:
                   $ref: "#/components/schemas/SupportTicket"
     post:
       operationId: createSupportTicket
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [support]
       summary: Create support ticket
       requestBody:
@@ -652,6 +775,11 @@ paths:
   /support/tickets/{id}/messages:
     get:
       operationId: getTicketMessages
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [support]
       summary: Get ticket conversation
       parameters:
@@ -671,6 +799,11 @@ paths:
                   $ref: "#/components/schemas/TicketMessage"
     post:
       operationId: replyToTicket
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [support]
       summary: Reply to ticket
       parameters:
@@ -697,6 +830,11 @@ paths:
   /api-keys:
     get:
       operationId: listApiKeys
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [apikeys]
       summary: List API keys
       responses:
@@ -710,6 +848,11 @@ paths:
                   $ref: "#/components/schemas/ApiKey"
     post:
       operationId: createApiKey
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [apikeys]
       summary: Generate API key
       requestBody:
@@ -729,6 +872,11 @@ paths:
   /api-keys/{id}:
     delete:
       operationId: revokeApiKey
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
       tags: [apikeys]
       summary: Revoke API key
       parameters:
@@ -749,6 +897,9 @@ paths:
   /admin/stats:
     get:
       operationId: getAdminStats
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Get admin dashboard stats
       responses:
@@ -762,6 +913,9 @@ paths:
   /admin/revenue-chart:
     get:
       operationId: getRevenueChart
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Get revenue chart data (last 30 days)
       responses:
@@ -777,6 +931,9 @@ paths:
   /admin/users:
     get:
       operationId: adminListUsers
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List all users
       responses:
@@ -792,6 +949,9 @@ paths:
   /admin/users/{id}/ban:
     post:
       operationId: adminBanUser
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Ban or unban user
       parameters:
@@ -817,6 +977,9 @@ paths:
   /admin/users/{id}/coins:
     post:
       operationId: adminAdjustCoins
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Adjust user coin balance
       parameters:
@@ -842,6 +1005,9 @@ paths:
   /admin/deployments:
     get:
       operationId: adminListDeployments
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List all deployments across all users
       responses:
@@ -857,6 +1023,9 @@ paths:
   /admin/deployments/{id}/stop:
     post:
       operationId: adminStopDeployment
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Force stop any deployment
       parameters:
@@ -876,6 +1045,9 @@ paths:
   /admin/bots:
     get:
       operationId: adminListBots
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List all bot templates
       responses:
@@ -889,6 +1061,9 @@ paths:
                   $ref: "#/components/schemas/Bot"
     post:
       operationId: adminCreateBot
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Create bot template
       requestBody:
@@ -908,6 +1083,9 @@ paths:
   /admin/bots/{id}:
     put:
       operationId: adminUpdateBot
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Update bot template
       parameters:
@@ -931,6 +1109,9 @@ paths:
                 $ref: "#/components/schemas/Bot"
     delete:
       operationId: adminDeleteBot
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Delete bot template
       parameters:
@@ -950,6 +1131,9 @@ paths:
   /admin/vouchers:
     get:
       operationId: adminListVouchers
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List vouchers
       responses:
@@ -963,6 +1147,9 @@ paths:
                   $ref: "#/components/schemas/Voucher"
     post:
       operationId: adminCreateVoucher
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Create voucher
       requestBody:
@@ -982,6 +1169,9 @@ paths:
   /admin/audit-logs:
     get:
       operationId: adminListAuditLogs
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List audit logs
       responses:
@@ -997,6 +1187,9 @@ paths:
   /admin/settings:
     get:
       operationId: adminGetSettings
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Get platform settings
       responses:
@@ -1008,6 +1201,9 @@ paths:
                 type: object
     post:
       operationId: adminUpdateSettings
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Update platform settings
       requestBody:
@@ -1027,6 +1223,9 @@ paths:
   /admin/broadcasts:
     post:
       operationId: adminSendBroadcast
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Send mass notification to all users
       requestBody:
@@ -1046,6 +1245,9 @@ paths:
   /admin/support/tickets:
     get:
       operationId: adminListSupportTickets
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: List all support tickets
       responses:
@@ -1061,6 +1263,9 @@ paths:
   /admin/support/tickets/{id}/reply:
     post:
       operationId: adminReplyToTicket
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Admin reply to ticket
       parameters:
@@ -1086,6 +1291,9 @@ paths:
   /admin/users/{id}/override-session:
     post:
       operationId: adminOverrideSession
+      x-api-key-accessible: false
+      x-api-key-access: Not available using customer API keys
+      security: []
       tags: [admin]
       summary: Admin override SESSION_ID (abuse cases only)
       parameters:
@@ -1108,7 +1316,1312 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /payments/domain:
+    post:
+      operationId: payHeroDomainPayment
+      tags: [customer-api]
+      summary: "Pay pending owned domain order. JSON body: orderId and phone."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, phone]
+              properties:
+                orderId: { type: integer }
+                phone: { type: string, example: "254712345678" }
+      responses:
+        "200": { description: Payment initiated }
+        "400": { description: Invalid order or phone }
+        "502": { description: PayHero unavailable }
+  /deployments/{id}/clone:
+    post:
+      operationId: customerCloneDeployment
+      tags: [customer-api]
+      summary: "Clone an owned deployment without copying its session credential."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/metrics:
+    get:
+      operationId: getDeploymentMetrics
+      tags: [customer-api]
+      summary: "Read owned deployment metrics."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/logs/export:
+    get:
+      operationId: exportDeploymentLogs
+      tags: [customer-api]
+      summary: "Export owned logs as text or JSON."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/webhook:
+    put:
+      operationId: setDeploymentWebhook
+      tags: [customer-api]
+      summary: "Configure an owned deployment webhook."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/webhook/test:
+    post:
+      operationId: testDeploymentWebhook
+      tags: [customer-api]
+      summary: "Send a test webhook event."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/logs/stream:
+    get:
+      operationId: streamDeploymentLogs
+      tags: [customer-api]
+      summary: "Stream owned logs as server-sent events."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/phone:
+    post:
+      operationId: setDeploymentPhone
+      tags: [customer-api]
+      summary: "Set phone number for an owned deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/schedule:
+    get:
+      operationId: getDeploymentSchedule
+      tags: [customer-api]
+      summary: "Read owned restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    put:
+      operationId: saveDeploymentSchedule
+      tags: [customer-api]
+      summary: "Create or update daily restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    delete:
+      operationId: deleteDeploymentSchedule
+      tags: [customer-api]
+      summary: "Remove owned restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/logs/search:
+    get:
+      operationId: searchDeploymentLogs
+      tags: [customer-api]
+      summary: "Search owned deployment logs."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments:
+    get:
+      operationId: listWebDeployments
+      tags: [customer-api]
+      summary: "List owned web deployments."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    post:
+      operationId: createWebDeployment
+      tags: [customer-api]
+      summary: "Create web deployment; environment values are omitted from API-key deployment responses."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/scan:
+    post:
+      operationId: scanWebDeploymentRepo
+      tags: [customer-api]
+      summary: "Validate a public GitHub repository URL."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/{id}:
+    get:
+      operationId: getWebDeployment
+      tags: [customer-api]
+      summary: "Get owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    patch:
+      operationId: updateWebDeployment
+      tags: [customer-api]
+      summary: "Update owned web deployment branch and autoDeploy."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    delete:
+      operationId: deleteWebDeployment
+      tags: [customer-api]
+      summary: "Delete owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/{id}/start:
+    post:
+      operationId: startWebDeployment
+      tags: [customer-api]
+      summary: "Start owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/{id}/stop:
+    post:
+      operationId: stopWebDeployment
+      tags: [customer-api]
+      summary: "Stop owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/{id}/domains:
+    post:
+      operationId: createDomainOrder
+      tags: [customer-api]
+      summary: "Create owned domain order; verification token returned at creation only."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /web-deployments/domains/{id}/verify:
+    post:
+      operationId: verifyDomain
+      tags: [customer-api]
+      summary: "Verify paid domain TXT record; token must not be echoed by errors."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /marketplace/submissions:
+    get:
+      operationId: listOwnMarketplaceSubmissions
+      tags: [customer-api]
+      summary: "List own marketplace submissions."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /marketplace/submit:
+    post:
+      operationId: submitMarketplaceBot
+      tags: [customer-api]
+      summary: "Submit bot for marketplace review."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /payments/subscribe:
+    post:
+      operationId: payHeroSubscribe
+      tags: [customer-api]
+      summary: "Start PayHero subscription checkout. JSON body: plan and phone; returns message, transactionId, plan and amountKes."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /payments/domain:
+    post:
+      operationId: payHeroDomainPayment
+      tags: [customer-api]
+      summary: "Pay pending owned domain order. JSON body: orderId and phone."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /payments/status/{id}:
+    get:
+      operationId: getPaymentStatus
+      tags: [customer-api]
+      summary: "Get own transaction status."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /teams:
+    get:
+      operationId: listTeams
+      tags: [customer-api]
+      summary: "List owned/member teams; no invite codes or member email fields."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+    post:
+      operationId: createTeam
+      tags: [customer-api]
+      summary: "Create team; invite code is returned only in creation response."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /teams/join:
+    post:
+      operationId: joinTeam
+      tags: [customer-api]
+      summary: "Join a team with inviteCode."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /teams/{id}/members/{memberId}:
+    delete:
+      operationId: removeTeamMember
+      tags: [customer-api]
+      summary: "Remove member from owned team."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /teams/{id}/regenerate-invite:
+    post:
+      operationId: regenerateTeamInvite
+      tags: [customer-api]
+      summary: "Rotate invite code; returned only by owner operation."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /referrals/my:
+    get:
+      operationId: getMyReferrals
+      tags: [customer-api]
+      summary: "Read referral information."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /referrals/apply:
+    post:
+      operationId: applyReferral
+      tags: [customer-api]
+      summary: "Apply referral code; no rewards are part of this API contract."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /github/status:
+    get:
+      operationId: getGithubStatus
+      tags: [customer-api]
+      summary: "Read connected GitHub status without credentials."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /github/repos:
+    get:
+      operationId: listGithubRepos
+      tags: [customer-api]
+      summary: "Discover connected repositories."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /github/repos/branches:
+    get:
+      operationId: listGithubBranches
+      tags: [customer-api]
+      summary: "Discover connected repository branches."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "400":
+          description: Invalid request
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+        "403":
+          description: Insufficient scope, ownership, or plan entitlement
+        "404":
+          description: Resource not found or not owned
+  /deployments/{id}/clone:
+    post:
+      operationId: customerCloneDeployment
+      tags: [customer-api]
+      summary: "Clone an owned deployment without copying its session credential."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/metrics:
+    get:
+      operationId: getDeploymentMetrics
+      tags: [customer-api]
+      summary: "Read owned deployment metrics."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/logs/export:
+    get:
+      operationId: exportDeploymentLogs
+      tags: [customer-api]
+      summary: "Export owned logs as text or JSON."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/webhook:
+    put:
+      operationId: setDeploymentWebhook
+      tags: [customer-api]
+      summary: "Configure an owned deployment webhook."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/webhook/test:
+    post:
+      operationId: testDeploymentWebhook
+      tags: [customer-api]
+      summary: "Send a test webhook event."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/logs/stream:
+    get:
+      operationId: streamDeploymentLogs
+      tags: [customer-api]
+      summary: "Stream owned logs as server-sent events."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/phone:
+    post:
+      operationId: setDeploymentPhone
+      tags: [customer-api]
+      summary: "Set phone number for an owned deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/schedule:
+    get:
+      operationId: getDeploymentSchedule
+      tags: [customer-api]
+      summary: "Read owned restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    put:
+      operationId: saveDeploymentSchedule
+      tags: [customer-api]
+      summary: "Create or update daily restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    delete:
+      operationId: deleteDeploymentSchedule
+      tags: [customer-api]
+      summary: "Remove owned restart schedule."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /deployments/{id}/logs/search:
+    get:
+      operationId: searchDeploymentLogs
+      tags: [customer-api]
+      summary: "Search owned deployment logs."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments:
+    get:
+      operationId: listWebDeployments
+      tags: [customer-api]
+      summary: "List owned web deployments."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    post:
+      operationId: createWebDeployment
+      tags: [customer-api]
+      summary: "Create web deployment; environment values are omitted from API-key deployment responses."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/scan:
+    post:
+      operationId: scanWebDeploymentRepo
+      tags: [customer-api]
+      summary: "Validate a public GitHub repository URL."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/{id}:
+    get:
+      operationId: getWebDeployment
+      tags: [customer-api]
+      summary: "Get owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    patch:
+      operationId: updateWebDeployment
+      tags: [customer-api]
+      summary: "Update owned web deployment branch and autoDeploy."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    delete:
+      operationId: deleteWebDeployment
+      tags: [customer-api]
+      summary: "Delete owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/{id}/start:
+    post:
+      operationId: startWebDeployment
+      tags: [customer-api]
+      summary: "Start owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/{id}/stop:
+    post:
+      operationId: stopWebDeployment
+      tags: [customer-api]
+      summary: "Stop owned web deployment."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/{id}/domains:
+    post:
+      operationId: createDomainOrder
+      tags: [customer-api]
+      summary: "Create owned domain order; verification token returned at creation only."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /web-deployments/domains/{id}/verify:
+    post:
+      operationId: verifyDomain
+      tags: [customer-api]
+      summary: "Verify paid domain TXT record; token must not be echoed by errors."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /marketplace/submissions:
+    get:
+      operationId: listOwnMarketplaceSubmissions
+      tags: [customer-api]
+      summary: "List own marketplace submissions."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /marketplace/submit:
+    post:
+      operationId: submitMarketplaceBot
+      tags: [customer-api]
+      summary: "Submit bot for marketplace review."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /payments/subscribe:
+    post:
+      operationId: payHeroSubscribe
+      tags: [customer-api]
+      summary: "Start PayHero subscription checkout. JSON body: plan and phone; returns message, transactionId, plan and amountKes."
+      x-api-key-accessible: true
+      x-api-key-scope: payments
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /payments/status/{id}:
+    get:
+      operationId: getPaymentStatus
+      tags: [customer-api]
+      summary: "Get own transaction status."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /teams:
+    get:
+      operationId: listTeams
+      tags: [customer-api]
+      summary: "List owned/member teams; no invite codes or member email fields."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+    post:
+      operationId: createTeam
+      tags: [customer-api]
+      summary: "Create team; invite code is returned only in creation response."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /teams/join:
+    post:
+      operationId: joinTeam
+      tags: [customer-api]
+      summary: "Join a team with inviteCode."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /teams/{id}/members/{memberId}:
+    delete:
+      operationId: removeTeamMember
+      tags: [customer-api]
+      summary: "Remove member from owned team."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /teams/{id}/regenerate-invite:
+    post:
+      operationId: regenerateTeamInvite
+      tags: [customer-api]
+      summary: "Rotate invite code; returned only by owner operation."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /referrals/my:
+    get:
+      operationId: getMyReferrals
+      tags: [customer-api]
+      summary: "Read referral information."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /referrals/apply:
+    post:
+      operationId: applyReferral
+      tags: [customer-api]
+      summary: "Apply referral code; no rewards are part of this API contract."
+      x-api-key-accessible: true
+      x-api-key-scope: write
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /github/status:
+    get:
+      operationId: getGithubStatus
+      tags: [customer-api]
+      summary: "Read connected GitHub status without credentials."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /github/repos:
+    get:
+      operationId: listGithubRepos
+      tags: [customer-api]
+      summary: "Discover connected repositories."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+  /github/repos/branches:
+    get:
+      operationId: listGithubBranches
+      tags: [customer-api]
+      summary: "Discover connected repository branches."
+      x-api-key-accessible: true
+      x-api-key-scope: read
+      security:
+        - ApiKey: []
+        - BearerApiKey: []
+      responses:
+        "200":
+          description: Successful response
+        "401":
+          description: Missing, invalid, expired, or revoked API key
+
 components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: "Send the key in the x-api-key header."
+    BearerApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: BERAHOST API key
+      description: "Send the same key as Authorization: Bearer bh_<key>."
   schemas:
     HealthStatus:
       type: object

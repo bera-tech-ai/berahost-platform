@@ -1,14 +1,14 @@
 import { Router } from "express";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireAuth } from "../middlewares/requireAuth";
+import { requireAuth, requireAny } from "../middlewares/requireAuth";
 import { FREE_PLAN, SUBSCRIPTION_PLANS, getPlan, isSubscriptionActive } from "../lib/subscriptions";
 
 const router = Router();
 router.get("/subscriptions/plans", async (_req, res): Promise<void> => {
   res.json([FREE_PLAN, ...Object.values(SUBSCRIPTION_PLANS).map((plan) => ({ ...plan, billing: "monthly", botLimit: plan.maxBots, webLimit: plan.maxWebApps }))]);
 });
-router.get("/subscriptions/status", requireAuth, async (req, res): Promise<void> => {
+router.get("/subscriptions/status", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const [dbUser] = await db.select().from(usersTable).where(eq(usersTable.id, user.id));
   const active = !!dbUser && isSubscriptionActive(dbUser);

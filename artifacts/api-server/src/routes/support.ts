@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, supportTicketsTable, ticketMessagesTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../middlewares/requireAuth";
+import { requireAny } from "../middlewares/requireAuth";
 
 const router = Router();
 
@@ -18,7 +18,7 @@ function serializeTicket(t: typeof supportTicketsTable.$inferSelect) {
   };
 }
 
-router.get("/support/tickets", requireAuth, async (req, res): Promise<void> => {
+router.get("/support/tickets", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const tickets = await db
     .select()
@@ -29,7 +29,7 @@ router.get("/support/tickets", requireAuth, async (req, res): Promise<void> => {
   res.json(tickets.map(serializeTicket));
 });
 
-router.post("/support/tickets", requireAuth, async (req, res): Promise<void> => {
+router.post("/support/tickets", requireAny("write"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const { subject, message, priority } = req.body;
 
@@ -57,12 +57,12 @@ router.post("/support/tickets", requireAuth, async (req, res): Promise<void> => 
   res.status(201).json(serializeTicket(ticket));
 });
 
-router.get("/support/tickets/:id/messages", requireAuth, async (req, res): Promise<void> => {
+router.get("/support/tickets/:id/messages", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 
   // Admins can view any ticket; regular users only their own
-  const whereClause = user.isAdmin
+  const whereClause = user.isAdmin && !(req as any).apiKey
     ? eq(supportTicketsTable.id, id)
     : and(eq(supportTicketsTable.id, id), eq(supportTicketsTable.userId, user.id));
 
@@ -91,7 +91,7 @@ router.get("/support/tickets/:id/messages", requireAuth, async (req, res): Promi
   });
 });
 
-router.post("/support/tickets/:id/messages", requireAuth, async (req, res): Promise<void> => {
+router.post("/support/tickets/:id/messages", requireAny("write"), async (req, res): Promise<void> => {
   const user = (req as any).user;
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   const { message } = req.body;
