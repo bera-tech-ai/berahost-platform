@@ -14,7 +14,7 @@ import { logger } from "./logger";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-gbyspbc3.manus.space";
 function publicUrlFor(slug: string) {
   const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;
@@ -182,7 +182,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     // 2. Generate the full-stack project
     await setBuild(buildId, { status: "generating" });
     const base = slugify(plan.appName || build.prompt.split(/\s+/).slice(0, 5).join(" "));
-    const files = await generateProjectFiles(build.prompt, plan, base, envKeys);
+    const files = await generateProjectFiles(build.prompt, plan, base, envKeys, note);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes

@@ -26,7 +26,7 @@ export type GithubRepository = {
   updatedAt: string | null;
 };
 
-const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-gbyspbc3.manus.space";
 
 function clientId() {
   return process.env.GITHUB_CLIENT_ID?.trim() || "";
@@ -72,6 +72,31 @@ export function publicBaseUrl(request?: { protocol: string; get(name: string): s
   if (configured) return configured.replace(/\/$/, "");
   if (request) return `${request.protocol}://${request.get("host") || "localhost"}`.replace(/\/$/, "");
   return "";
+}
+
+type OriginRequest = { protocol: string; get(name: string): string | undefined };
+
+// The platform's public origin changes when it is redeployed under a new
+// host, but URLs minted earlier (deployment publicUrls, a build's stored
+// live-check URL) keep the old origin baked in — and the old host may no
+// longer serve at all. At read time, rebase any absolute URL onto the
+// origin of the request being served, so links always point at the host
+// the user is actually on. Null, relative or unparseable values, and
+// requests without a usable host, pass through unchanged.
+export function withRequestOrigin<T extends string | null | undefined>(storedUrl: T, request?: OriginRequest): T {
+  if (!storedUrl || !request) return storedUrl;
+  const host = request.get("host");
+  if (!host) return storedUrl;
+  try {
+    const url = new URL(storedUrl);
+    const origin = new URL(`${request.protocol}://${host}`);
+    url.protocol = origin.protocol;
+    url.hostname = origin.hostname;
+    url.port = origin.port;
+    return url.toString() as T;
+  } catch {
+    return storedUrl;
+  }
 }
 
 export function githubCallbackUrl(request?: { protocol: string; get(name: string): string | undefined }): string {
