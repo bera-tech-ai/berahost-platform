@@ -20,7 +20,7 @@ export function googleConfigured(): boolean {
 }
 
 export function googleCallbackUrl(request?: { protocol: string; get(name: string): string | undefined }): string {
-  const configured = process.env.PUBLIC_URL || process.env.FRONTEND_URL || "https://berahost-bfer3udn.manus.space";
+  const configured = process.env.PUBLIC_URL || process.env.FRONTEND_URL || "https://berahost-cywge4uc.manus.space";
   const origin = configured || (request ? `${request.protocol}://${request.get("host") || "localhost"}` : "");
   return `${origin.replace(/\/$/, "")}/api/auth/google/callback`;
 }

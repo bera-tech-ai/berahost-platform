@@ -26,7 +26,7 @@ export type GithubRepository = {
   updatedAt: string | null;
 };
 
-const MANAGED_PUBLIC_URL = "https://berahost-bfer3udn.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
 
 function clientId() {
   return process.env.GITHUB_CLIENT_ID?.trim() || "";
