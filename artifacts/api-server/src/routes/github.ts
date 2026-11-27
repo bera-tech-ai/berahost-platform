@@ -3,7 +3,7 @@ import { db, githubWebhooksTable, deploymentsTable, botsTable, usersTable, webDe
 import { eq, and } from "drizzle-orm";
 import { requireAny, requireAuth } from "../middlewares/requireAuth";
 import { stopBotProcess, startBotProcess } from "../lib/botProcess";
-import { decryptGithubToken, deleteGithubWebhook, getGithubIdentity, listGithubBranches, listGithubRepositories, managedGithubWebhookUrl, removeWebDeploymentWebhook, revokeGithubToken } from "../lib/github";
+import { decryptGithubToken, deleteGithubWebhook, encryptGithubToken, getGithubIdentity, listGithubBranches, listGithubRepositories, managedGithubWebhookUrl, removeWebDeploymentWebhook, revokeGithubToken } from "../lib/github";
 import { redeployWebDeployment } from "../lib/webProcess";
 import { logger } from "../lib/logger";
 import crypto from "crypto";
@@ -12,7 +12,50 @@ const router = Router();
 
 router.get("/github/status", requireAny("read"), async (req, res): Promise<void> => {
   const user = (req as any).user;
-  res.json({ connected: Boolean(user.githubId && user.githubAccessTokenEncrypted), login: user.githubLogin || null, avatarUrl: user.githubAvatarUrl || null, userId: user.githubId || null });
+  const connected = Boolean(user.githubId && user.githubAccessTokenEncrypted);
+  // How the stored credential arrived: personal access tokens carry
+  // recognisable prefixes (ghp_ classic, github_pat_ fine-grained);
+  // OAuth app tokens do not.
+  let method: "oauth" | "token" | null = null;
+  if (connected) {
+    const token = decryptGithubToken(user.githubAccessTokenEncrypted);
+    method = token && (token.startsWith("ghp_") || token.startsWith("github_pat_")) ? "token" : "oauth";
+  }
+  res.json({ connected, method, login: user.githubLogin || null, avatarUrl: user.githubAvatarUrl || null, userId: user.githubId || null });
+});
+
+// Fallback connection for when OAuth cannot be completed (e.g. the app
+// is not configured on this deployment): the user pastes a personal
+// access token, it is verified against GitHub, and then stored ENCRYPTED
+// in the same field OAuth uses — every consumer (deploys, Agent Bera)
+// works identically, and the token is never returned by the API again.
+router.post("/github/token", requireAuth, async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const token = String(req.body?.token || "").trim();
+  if (token.length < 20 || token.length > 255 || /\s/.test(token)) {
+    res.status(400).json({ error: "That does not look like a GitHub token. Paste the whole token with no spaces." });
+    return;
+  }
+  let identity;
+  try {
+    identity = await getGithubIdentity(token);
+  } catch {
+    res.status(400).json({ error: "GitHub rejected that token. Check that you copied it fully and that it has not expired or been revoked." });
+    return;
+  }
+  const [owned] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.githubId, String(identity.id)));
+  if (owned && owned.id !== user.id) {
+    res.status(409).json({ error: "This GitHub account is already connected to another BERAHOST account." });
+    return;
+  }
+  await db.update(usersTable).set({
+    githubId: String(identity.id),
+    githubLogin: identity.login,
+    githubAvatarUrl: identity.avatarUrl,
+    githubAccessTokenEncrypted: encryptGithubToken(token)
+  }).where(eq(usersTable.id, user.id));
+  logger.info({ userId: user.id, githubLogin: identity.login }, "GitHub connected via personal access token");
+  res.json({ connected: true, method: "token", login: identity.login, avatarUrl: identity.avatarUrl, userId: String(identity.id) });
 });
 
 router.get("/github/repos", requireAny("read"), async (req, res): Promise<void> => {

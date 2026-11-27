@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import GithubTokenConnect from "@/components/github-token-connect";
+import AgentFace, { TypingDots } from "@/components/agent-face";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -16,10 +19,12 @@ type AgentBuild = {
   name?: string | null;
   status: string;
   error?: string | null;
-  plan?: { appName?: string; summary?: string; endpoints?: Array<{ method: string; path: string }> } | null;
+  plan?: { appName?: string; summary?: string; resources?: Array<{ name: string; endpoints: Array<{ method: string; path: string }> }>; endpoints?: Array<{ method: string; path: string }> } | null;
+  parentId?: number | null;
+  builtinDb?: boolean;
   envVarKeys?: string[];
   testResults?: { ok: boolean; results: CheckResult[] } | null;
-  liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string } } | null;
+  liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string; screenshot?: string; flow?: { attempted: boolean; ok: boolean; detail: string }; vision?: { ok: boolean | null; issues: string[]; detail: string } } } | null;
   repoUrl?: string | null;
   publicUrl?: string | null;
   deploymentStatus?: string | null;
@@ -49,11 +54,89 @@ function stageLabel(status: string) {
   }
 }
 
+function BuildActions({ build, onDone }: { build: AgentBuild; onDone: () => void }) {
+  const { toast } = useToast();
+  const [instruction, setInstruction] = useState("");
+  const [envText, setEnvText] = useState("");
+  const [useBuiltinDb, setUseBuiltinDb] = useState(false);
+  const [busy, setBusy] = useState("");
+  const rootId = build.parentId ?? build.id;
+
+  const submitEdit = async () => {
+    if (instruction.trim().length < 3) { toast({ title: "Describe the change", description: "A short sentence is enough — e.g. 'make the header dark blue'.", variant: "destructive" }); return; }
+    setBusy("edit");
+    try {
+      await apiFetch(`/api/agent-bera/builds/${rootId}/edit`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: instruction.trim() }) });
+      setInstruction("");
+      toast({ title: "Edit started", description: "Agent Bera is applying your change, re-testing the APIs, then updating the live app." });
+      onDone();
+    } catch (err: any) { toast({ title: "Edit could not start", description: err?.error || "Try again.", variant: "destructive" }); }
+    finally { setBusy(""); }
+  };
+
+  const saveEnv = async () => {
+    const envVars: Record<string, string> = {};
+    for (const line of envText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const eq = trimmed.indexOf("=");
+      const key = eq > 0 ? trimmed.slice(0, eq).trim() : "";
+      if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) { toast({ title: "Check your variables", description: `Each line must look like KEY=value — "${trimmed.slice(0, 40)}" doesn't.`, variant: "destructive" }); return; }
+      envVars[key] = trimmed.slice(eq + 1).trim();
+    }
+    setBusy("env");
+    try {
+      await apiFetch(`/api/agent-bera/builds/${rootId}/env`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ envVars }) });
+      setEnvText("");
+      toast({ title: "Variables saved", description: "The app is restarting with the new variables." });
+      onDone();
+    } catch (err: any) { toast({ title: "Variables not saved", description: err?.error || "Try again.", variant: "destructive" }); }
+    finally { setBusy(""); }
+  };
+
+  return (
+    <div className="space-y-3 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          placeholder="Edit this app — e.g. add a phone field to orders, make the header dark…"
+          className="min-w-64 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          maxLength={1000}
+        />
+        <Button size="sm" onClick={submitEdit} disabled={busy === "edit"}>
+          {busy === "edit" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
+          Edit app
+        </Button>
+      </div>
+      <details>
+        <summary className="cursor-pointer text-xs text-muted-foreground">Environment variables</summary>
+        <div className="mt-2 space-y-2">
+          <Textarea
+            value={envText}
+            onChange={(e) => setEnvText(e.target.value)}
+            placeholder={"KEY=value — one per line"}
+            rows={3}
+            className="font-mono text-xs"
+          />
+          <p className="text-xs text-muted-foreground">Saving REPLACES all of the app's variables and restarts it. Values are never shown anywhere, so re-enter every variable you want to keep{build.builtinDb ? " (the built-in DATABASE_URL is kept automatically)" : ""}. Current names: {(build.envVarKeys || []).join(", ") || "none"}.</p>
+          <Button size="sm" variant="outline" onClick={saveEnv} disabled={busy === "env"}>
+            {busy === "env" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Save variables & restart
+          </Button>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export default function AgentBeraPage() {
   const { toast } = useToast();
   const [builds, setBuilds] = useState<AgentBuild[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [apiUrl, setApiUrl] = useState("");
   const [envText, setEnvText] = useState("");
+  const [useBuiltinDb, setUseBuiltinDb] = useState(false);
   const [busy, setBusy] = useState(false);
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
   const [githubLogin, setGithubLogin] = useState<string | null>(null);
@@ -73,6 +156,19 @@ export default function AgentBeraPage() {
     const timer = window.setInterval(load, 4000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // The first build still in flight drives this page's living face and
+  // is broadcast to the Bera Guide, which mirrors the working state
+  // (fast ring, typing dots, stage) in its corner of every page.
+  const activeBuild = builds.find(b => b.status !== "live" && b.status !== "failed");
+  useEffect(() => {
+    const detail = activeBuild ? { active: true, stage: activeBuild.status } : { active: false };
+    try {
+      if (activeBuild) sessionStorage.setItem("bera-build-activity", JSON.stringify({ ...detail, ts: Date.now() }));
+      else sessionStorage.removeItem("bera-build-activity");
+    } catch { /* storage unavailable — the event below still lands */ }
+    window.dispatchEvent(new CustomEvent("bera-build-activity", { detail }));
+  }, [activeBuild?.id, activeBuild?.status]);
 
   const connectGithub = () => { window.location.href = `${BASE}api/auth/github?mode=connect&returnTo=/agent-bera`; };
 
@@ -96,9 +192,10 @@ export default function AgentBeraPage() {
     }
     setBusy(true);
     try {
-      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim(), ...(Object.keys(envVars).length ? { envVars } : {}) }) });
+      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim(), ...(Object.keys(envVars).length ? { envVars } : {}), ...(useBuiltinDb ? { useBuiltinDb: true } : {}), ...(apiUrl.trim() ? { apiUrl: apiUrl.trim() } : {}) }) });
       setPrompt("");
       setEnvText("");
+      setUseBuiltinDb(false);
       toast({ title: "Agent Bera is on it", description: "Planning, coding the backend, testing the APIs, then publishing — watch the progress below." });
       await load();
     } catch (err: any) {
@@ -119,12 +216,14 @@ export default function AgentBeraPage() {
       `}</style>
       <div>
         <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight">
-          <span className="agent-bera-mark relative inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-md">
-            <WandSparkles className="h-5 w-5" />
-            <span className="agent-bera-dot absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent" />
-          </span>
+          <AgentFace size={40} working={!!activeBuild} />
           Agent Bera
         </h1>
+        {activeBuild && (
+          <p className="mt-1 flex items-center gap-2 text-sm text-primary">
+            Agent Bera is working — {STAGE_LABELS[activeBuild.status] || activeBuild.status} <TypingDots />
+          </p>
+        )}
         <p className="text-muted-foreground mt-1">Describe the app you want in plain language. Agent Bera plans it, writes the full-stack code (Node/Express backend + API-driven frontend), boots it in a sandbox and tests every API endpoint before anything is published, then deploys it here on BERAHOST and checks the live result.</p>
       </div>
 
@@ -134,6 +233,7 @@ export default function AgentBeraPage() {
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">Agent Bera publishes every site it builds as a repository in your GitHub account, then deploys it from there — the same flow as GitHub deploy. Connect GitHub once and you're set.</p>
             <Button onClick={connectGithub}><Github className="mr-2 h-4 w-4" /> Connect GitHub</Button>
+            <GithubTokenConnect onConnected={() => loadGithub()} />
           </CardContent>
         </Card>
       )}
@@ -163,6 +263,15 @@ export default function AgentBeraPage() {
               />
               <p className="text-xs text-muted-foreground">One KEY=value per line. Give the app a real database with DATABASE_URL (Postgres) and the agent will code against it, run its endpoint tests with these variables, and deploy with them. Values are stored with the deployment and never shown again — only the names appear on the build.</p>
             </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={useBuiltinDb} onChange={(e) => setUseBuiltinDb(e.target.checked)} disabled={githubConnected === false} className="mt-0.5" />
+              <span>Give my app a <span className="font-medium">built-in database</span> <span className="text-muted-foreground">— BERAHOST provisions an isolated Postgres database for the app, so its data survives restarts. No DATABASE_URL needed.</span></span>
+            </label>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">External API <span className="font-normal text-muted-foreground">(optional)</span></label>
+              <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.example.com — an API or its docs page" disabled={githubConnected === false} className="font-mono text-xs" />
+              <p className="text-xs text-muted-foreground">Building against an existing API? Paste its base URL or documentation page — the agent visits it first, learns what it returns, and codes against the real thing.</p>
+            </div>
             <div className="flex items-center gap-3">
               <Button type="submit" disabled={busy || githubConnected === false}>
                 {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
@@ -185,6 +294,9 @@ export default function AgentBeraPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{b.name || "Website"}</span>
                   <Badge variant="outline" className={statusTone(b.status)}>{b.status.toUpperCase()}</Badge>
+                  {b.parentId ? <Badge variant="outline">EDIT</Badge> : null}
+                  {b.builtinDb ? <Badge variant="outline">BUILT-IN DB</Badge> : null}
+                  {(b as any).apiUrl ? <Badge variant="outline">API</Badge> : null}
                   {b.status !== "live" && b.status !== "failed" && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
                 </div>
                 <p className="text-sm text-muted-foreground">{b.prompt}</p>
@@ -199,9 +311,15 @@ export default function AgentBeraPage() {
                   </div>
                 )}
                 {b.error && <p className="text-sm text-destructive">{b.error}</p>}
-                {b.plan?.endpoints && b.plan.endpoints.length > 0 && (
+                {b.plan?.resources && b.plan.resources.length > 0 ? (
+                  <div className="space-y-0.5">
+                    {b.plan.resources.map((r) => (
+                      <p key={r.name} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{r.name}</span> — {r.endpoints.map((e) => `${e.method} ${e.path}`).join(" · ")}</p>
+                    ))}
+                  </div>
+                ) : b.plan?.endpoints && b.plan.endpoints.length > 0 ? (
                   <p className="text-xs text-muted-foreground">API: {b.plan.endpoints.map((e) => `${e.method} ${e.path}`).join(" · ")}</p>
-                )}
+                ) : null}
                 {b.envVarKeys && b.envVarKeys.length > 0 && (
                   <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">Variables:
                     {b.envVarKeys.map((k) => <span key={k} className="rounded-full border border-border bg-muted/30 px-2 py-0.5 font-mono text-[11px]">{k}</span>)}
@@ -216,13 +334,21 @@ export default function AgentBeraPage() {
                 {b.liveCheck && (
                   <p className="text-xs">
                     <span className={b.liveCheck.ok ? "text-accent" : "text-destructive"}>Live check: {b.liveCheck.ok ? "passed" : "problems found"}</span>
-                    <span className="text-muted-foreground"> · Browser: {b.liveCheck.browser.available ? (b.liveCheck.browser.ok ? "loaded clean" : "loaded with JS errors") : "not available on this host (HTTP + API checks still ran)"}</span>
+                    <span className="text-muted-foreground"> · Browser: {b.liveCheck.browser.available ? b.liveCheck.browser.detail : "browser runtime unavailable (HTTP + API checks still ran)"}</span>
                   </p>
                 )}
+                {b.liveCheck?.browser?.screenshot && (
+                  <a href={b.publicUrl || undefined} target="_blank" rel="noreferrer" className="block max-w-md">
+                    <img src={b.liveCheck.browser.screenshot} alt="Screenshot of the live app taken by Agent Bera's browser check" className="w-full rounded-md border border-border" />
+                  </a>
+                )}
+                {b.liveCheck?.browser?.flow?.attempted && <p className={`mt-1 text-xs ${b.liveCheck.browser.flow.ok ? "text-muted-foreground" : "text-red-300"}`}>🖱️ Interaction: {b.liveCheck.browser.flow.detail}</p>}
+                {b.liveCheck?.browser?.vision && b.liveCheck.browser.vision.ok !== null && <p className={`mt-1 text-xs ${b.liveCheck.browser.vision.ok ? "text-muted-foreground" : "text-red-300"}`}>👁️ {b.liveCheck.browser.vision.detail}</p>}
                 <div className="flex flex-wrap gap-4 text-sm">
                   {b.publicUrl && b.status === "live" && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.publicUrl} target="_blank" rel="noreferrer">Visit live site <ExternalLink className="h-3.5 w-3.5" /></a>}
                   {b.repoUrl && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.repoUrl} target="_blank" rel="noreferrer"><Github className="h-3.5 w-3.5" /> View code</a>}
                 </div>
+                {b.status === "live" && !b.parentId && <BuildActions build={b} onDone={load} />}
               </CardContent>
             </Card>
           );

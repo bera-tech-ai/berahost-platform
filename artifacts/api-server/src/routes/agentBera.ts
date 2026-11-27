@@ -4,7 +4,9 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { requireAny } from "../middlewares/requireAuth";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 import { decryptGithubToken } from "../lib/github";
-import { runAgentBuild } from "../lib/agentBuild";
+import { runAgentBuild, runAgentEdit } from "../lib/agentBuild";
+import { assertPublicUrl } from "../lib/agentExplore";
+import { startWebDeployment } from "../lib/webProcess";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -40,6 +42,9 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     testResults: build.testResults ?? null,
     liveCheck: build.liveCheck ?? null,
     buildLog: build.buildLog ?? null,
+    parentId: build.parentId ?? null,
+    builtinDb: Boolean(build.builtinDb),
+    apiUrl: (build as any).apiUrl ?? null,
     repoUrl: build.repoUrl,
     repoFullName: build.repoFullName,
     webDeploymentId: build.webDeploymentId,
@@ -63,6 +68,21 @@ router.get("/agent-bera/builds", requireAny("read"), async (req, res): Promise<v
   const deps = await deploymentsById(builds.map(b => b.webDeploymentId).filter((x): x is number => typeof x === "number"));
   res.json(builds.map(b => serialize(b, b.webDeploymentId ? deps.get(b.webDeploymentId) : null)));
 });
+
+// Shared env-var validation: an object of KEY: value pairs, names like
+// shell identifiers, values capped. Returns null + message on bad input.
+function validateEnvVars(raw: unknown): { envVars: Record<string, string> } | { error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "envVars must be an object of KEY: value pairs." };
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > 30) return { error: "At most 30 environment variables per build." };
+  const envVars: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) return { error: `Invalid environment variable name: ${key}` };
+    if (typeof value !== "string" || value.length > 4096) return { error: `Invalid value for ${key} — values are text up to 4,096 characters.` };
+    envVars[key] = value;
+  }
+  return { envVars };
+}
 
 router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise<void> => {
   const user = (req as any).user;
@@ -90,21 +110,85 @@ router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise
   // and are never returned by the API again.
   let envVars: Record<string, string> = {};
   if (req.body?.envVars !== undefined) {
-    const raw = req.body.envVars;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) { res.status(400).json({ error: "envVars must be an object of KEY: value pairs." }); return; }
-    const entries = Object.entries(raw as Record<string, unknown>);
-    if (entries.length > 30) { res.status(400).json({ error: "At most 30 environment variables per build." }); return; }
-    for (const [key, value] of entries) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) { res.status(400).json({ error: `Invalid environment variable name: ${key}` }); return; }
-      if (typeof value !== "string" || value.length > 4096) { res.status(400).json({ error: `Invalid value for ${key} — values are text up to 4,096 characters.` }); return; }
-      envVars[key] = value;
-    }
+    const checked = validateEnvVars(req.body.envVars);
+    if ("error" in checked) { res.status(400).json({ error: checked.error }); return; }
+    envVars = checked.envVars;
+  }
+  const builtinDb = req.body?.useBuiltinDb === true;
+  if (builtinDb && envVars.DATABASE_URL) { res.status(400).json({ error: "Choose either a built-in database or your own DATABASE_URL, not both." }); return; }
+  let apiUrl: string | null = null;
+  if (req.body?.apiUrl !== undefined && String(req.body.apiUrl).trim() !== "") {
+    try { apiUrl = (await assertPublicUrl(String(req.body.apiUrl))).toString(); }
+    catch (e: any) { res.status(400).json({ error: e?.message || "That API URL cannot be used." }); return; }
   }
 
   const name = prompt.replace(/\s+/g, " ").slice(0, 60);
-  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars }).returning();
+  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars, builtinDb, apiUrl } as any).returning();
   runAgentBuild(build.id).catch((err) => logger.error({ err, buildId: build.id }, "Agent Bera build crashed"));
   res.status(202).json(serialize(build, null));
+});
+
+// Edit an existing live app in place. The edit is its own build row
+// (parentId -> the original) that reuses the original's repo, deployment,
+// plan and env vars; runAgentEdit applies the same test gate before
+// anything is pushed.
+router.post("/agent-bera/builds/:id/edit", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const entitlement = await activeUser(user.id);
+  if (!entitlement) { res.status(402).json({ error: "An active monthly subscription is required before Agent Bera can edit for you." }); return; }
+  const instruction = String(req.body?.instruction || "").trim();
+  if (instruction.length < 3) { res.status(400).json({ error: "Describe the change you want in a sentence." }); return; }
+  if (instruction.length > 1000) { res.status(400).json({ error: "That instruction is too long — keep it under 1,000 characters." }); return; }
+  const token = decryptGithubToken(entitlement.user.githubAccessTokenEncrypted);
+  if (!token) { res.status(409).json({ error: "Connect GitHub first — Agent Bera updates the app in your GitHub account.", code: "GITHUB_NOT_CONNECTED" }); return; }
+  const parentId = Number(req.params.id);
+  const [parent] = await db.select().from(agentBuildsTable).where(and(eq(agentBuildsTable.id, parentId), eq(agentBuildsTable.userId, user.id)));
+  if (!parent) { res.status(404).json({ error: "Build not found." }); return; }
+  const root = parent.parentId ? await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, parent.parentId)).then(r => r[0]) : parent;
+  if (!root?.repoFullName || !root.webDeploymentId) { res.status(409).json({ error: "This app is not live yet — only a live app can be edited." }); return; }
+  const [edit] = await db.insert(agentBuildsTable).values({
+    userId: user.id,
+    prompt: instruction,
+    name: root.name,
+    status: "planning",
+    parentId: root.id,
+    plan: root.plan as any,
+    envVars: root.envVars as any,
+    builtinDb: root.builtinDb,
+    apiUrl: (root as any).apiUrl ?? null,
+    repoUrl: root.repoUrl,
+    repoFullName: root.repoFullName,
+    webDeploymentId: root.webDeploymentId
+  }).returning();
+  runAgentEdit(edit.id).catch((err) => logger.error({ err, buildId: edit.id }, "Agent Bera edit crashed"));
+  res.status(202).json(serialize(edit, null));
+});
+
+// Replace a live app's environment variables and restart it with the new
+// set. Values are write-only: the response carries names only, like every
+// other build response. The built-in DATABASE_URL (when the app has one)
+// is platform-managed and cannot be removed here.
+router.patch("/agent-bera/builds/:id/env", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const entitlement = await activeUser(user.id);
+  if (!entitlement) { res.status(402).json({ error: "An active monthly subscription is required to change an app's variables." }); return; }
+  const checked = validateEnvVars(req.body?.envVars);
+  if ("error" in checked) { res.status(400).json({ error: checked.error }); return; }
+  const id = Number(req.params.id);
+  const [build] = await db.select().from(agentBuildsTable).where(and(eq(agentBuildsTable.id, id), eq(agentBuildsTable.userId, user.id)));
+  if (!build) { res.status(404).json({ error: "Build not found." }); return; }
+  const root = build.parentId ? await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, build.parentId)).then(r => r[0]) : build;
+  if (!root?.webDeploymentId) { res.status(409).json({ error: "This app has no deployment yet — variables are set when it is built." }); return; }
+  const next: Record<string, string> = { ...checked.envVars };
+  const current = root.envVars && typeof root.envVars === "object" ? root.envVars as Record<string, string> : {};
+  if (root.builtinDb && current.DATABASE_URL && !next.DATABASE_URL) next.DATABASE_URL = current.DATABASE_URL;
+  if ((root as any).apiUrl) next.EXTERNAL_API_URL = String((root as any).apiUrl);
+  await db.update(agentBuildsTable).set({ envVars: next, updatedAt: new Date() }).where(eq(agentBuildsTable.id, root.id));
+  await db.update(webDeploymentsTable).set({ envVars: next, status: "queued", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, root.webDeploymentId));
+  startWebDeployment(root.webDeploymentId).catch((err) => logger.error({ err, webDeploymentId: root.webDeploymentId }, "Agent Bera env-change restart failed"));
+  const [updated] = await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, root.id));
+  const [dep] = await db.select({ slug: webDeploymentsTable.slug, status: webDeploymentsTable.status }).from(webDeploymentsTable).where(eq(webDeploymentsTable.id, root.webDeploymentId));
+  res.json(serialize(updated, dep ?? null));
 });
 
 export default router;
