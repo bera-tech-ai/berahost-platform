@@ -322,9 +322,15 @@ export async function handleWebRequest(req: any, res: any, next: any): Promise<v
     // Never forward the original Content-Length: fetch computes it from the
     // body actually sent. A stale length is what made targets hang.
     delete headers["content-length"];
-    const response = await fetch(target, { method: req.method, headers: headers as any, body });
+    const response = await fetch(target, { method: req.method, headers: headers as any, body, redirect: "manual" });
     res.status(response.status);
-    response.headers.forEach((value, key) => { if (key.toLowerCase() !== "transfer-encoding") res.setHeader(key, value); });
+    response.headers.forEach((value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey !== "transfer-encoding" && lowerKey !== "set-cookie") res.setHeader(key, value);
+    });
+    const headersWithCookies = response.headers as Headers & { getSetCookie?: () => string[] };
+    const setCookies = headersWithCookies.getSetCookie?.() ?? headersWithCookies.get("set-cookie");
+    if (setCookies) res.setHeader("Set-Cookie", Array.isArray(setCookies) ? setCookies : [setCookies]);
     res.send(Buffer.from(await response.arrayBuffer()));
   } catch { res.status(502).send("Web runtime is not responding."); }
 }
