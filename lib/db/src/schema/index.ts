@@ -19,6 +19,7 @@ export * from "./github_webhooks";
 export * from "./otp_codes";
 export * from "./session";
 export * from "./web_deployments";
+export * from "./agent_builds";
 export * from "./domain_orders";
 
 export * from "./referrals";

@@ -17,6 +17,7 @@ import DeploymentConsole from "@/pages/deployments/[id]";
 import PaymentsPage from "@/pages/payments";
 import SubscriptionsPage from "@/pages/subscriptions";
 import WebDeploymentsPage from "@/pages/web-deployments";
+import AgentBeraPage from "@/pages/agent-bera";
 import NotificationsPage from "@/pages/notifications";
 import SupportTickets from "@/pages/support";
 import TicketDetail from "@/pages/support/[id]";
@@ -77,6 +78,7 @@ function Router() {
       <Route path="/deployments"><ProtectedRoute component={Deployments} /></Route>
       <Route path="/deployments/:id"><ProtectedRoute component={DeploymentConsole} /></Route>
       <Route path="/web-deployments"><ProtectedRoute component={WebDeploymentsPage} /></Route>
+      <Route path="/agent-bera"><ProtectedRoute component={AgentBeraPage} /></Route>
       <Route path="/payments"><ProtectedRoute component={PaymentsPage} /></Route>
       <Route path="/subscriptions"><ProtectedRoute component={SubscriptionsPage} /></Route>
       <Route path="/notifications"><ProtectedRoute component={NotificationsPage} /></Route>

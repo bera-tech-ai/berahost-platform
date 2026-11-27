@@ -142,6 +142,24 @@ export async function listGithubBranches(accessToken: string, fullName: string):
   return Array.isArray(rows) ? rows.map((row: any) => String(row.name)).filter(Boolean) : [];
 }
 
+export async function createGithubRepository(accessToken: string, name: string, description?: string): Promise<GithubRepository> {
+  const repo = await readGithubJson(await githubRequest("/user/repos", accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description: description || "Built with Agent Bera on BERAHOST", private: false, auto_init: false }),
+  }));
+  return { id: Number(repo.id), fullName: String(repo.full_name), name: String(repo.name), ownerLogin: String(repo.owner?.login || ""), private: Boolean(repo.private), htmlUrl: String(repo.html_url), defaultBranch: String(repo.default_branch || "main"), description: repo.description ? String(repo.description) : null, updatedAt: repo.updated_at ? String(repo.updated_at) : null };
+}
+
+export async function createRepositoryFile(accessToken: string, fullName: string, pathInRepo: string, content: string, message: string): Promise<void> {
+  const safePath = pathInRepo.split("/").map(encodeURIComponent).join("/");
+  await readGithubJson(await githubRequest(`${repoPath(fullName)}/contents/${safePath}`, accessToken, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, content: Buffer.from(content, "utf8").toString("base64") }),
+  }));
+}
+
 export async function getGithubRepository(accessToken: string, fullName: string): Promise<GithubRepository> {
   const repo = await readGithubJson(await githubRequest(repoPath(fullName), accessToken));
   return { id: Number(repo.id), fullName: String(repo.full_name), name: String(repo.name), ownerLogin: String(repo.owner?.login || ""), private: Boolean(repo.private), htmlUrl: String(repo.html_url), defaultBranch: String(repo.default_branch || "main"), description: repo.description ? String(repo.description) : null, updatedAt: repo.updated_at ? String(repo.updated_at) : null };

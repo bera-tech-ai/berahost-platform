@@ -23,7 +23,7 @@ throw new Error(
 // before they're killed externally.
 export const pool = new Pool({
 connectionString: databaseUrl,
-options: -c search_path=${databaseSchema},
+options: `-c search_path=${databaseSchema}`,
 keepAlive: true,
 keepAliveInitialDelayMillis: 10_000,
 idleTimeoutMillis: 30_000,
@@ -31,7 +31,7 @@ connectionTimeoutMillis: 10_000,
 max: 10,
 });
 await pool.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [databaseSchema]).then((result) => {
-if (result.rowCount !== 1) throw new Error(Required database schema '${databaseSchema}' is missing; refusing to use PostgreSQL fallback schemas.);
+if (result.rowCount !== 1) throw new Error(`Required database schema '${databaseSchema}' is missing; refusing to use PostgreSQL fallback schemas.`);
 });
 export const db = drizzle(pool, { schema });
 
