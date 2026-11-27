@@ -17,6 +17,7 @@ type AgentBuild = {
   status: string;
   error?: string | null;
   plan?: { appName?: string; summary?: string; endpoints?: Array<{ method: string; path: string }> } | null;
+  envVarKeys?: string[];
   testResults?: { ok: boolean; results: CheckResult[] } | null;
   liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string } } | null;
   repoUrl?: string | null;
@@ -52,6 +53,7 @@ export default function AgentBeraPage() {
   const { toast } = useToast();
   const [builds, setBuilds] = useState<AgentBuild[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [envText, setEnvText] = useState("");
   const [busy, setBusy] = useState(false);
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
   const [githubLogin, setGithubLogin] = useState<string | null>(null);
@@ -80,10 +82,23 @@ export default function AgentBeraPage() {
       toast({ title: "Describe your website", description: "A sentence or two is enough — what is it for, and what should it show?", variant: "destructive" });
       return;
     }
+    const envVars: Record<string, string> = {};
+    for (const line of envText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const eq = trimmed.indexOf("=");
+      const key = eq > 0 ? trimmed.slice(0, eq).trim() : "";
+      if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        toast({ title: "Check your variables", description: `Each line must look like KEY=value — "${trimmed.slice(0, 40)}" doesn't.`, variant: "destructive" });
+        return;
+      }
+      envVars[key] = trimmed.slice(eq + 1).trim();
+    }
     setBusy(true);
     try {
-      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim() }) });
+      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim(), ...(Object.keys(envVars).length ? { envVars } : {}) }) });
       setPrompt("");
+      setEnvText("");
       toast({ title: "Agent Bera is on it", description: "Planning, coding the backend, testing the APIs, then publishing — watch the progress below." });
       await load();
     } catch (err: any) {
@@ -93,8 +108,23 @@ export default function AgentBeraPage() {
 
   return (
     <div className="space-y-6">
+      <style>{`
+        @keyframes agent-bera-float { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-3px) rotate(6deg); } }
+        @keyframes agent-bera-shimmer { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(240%) skewX(-18deg); } }
+        @keyframes agent-bera-ping { 0% { transform: scale(1); opacity: .7; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+        .agent-bera-mark { position: relative; overflow: hidden; }
+        .agent-bera-mark::after { content: ""; position: absolute; top: 0; bottom: 0; width: 45%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); animation: agent-bera-shimmer 2.8s ease-in-out infinite; }
+        .agent-bera-mark svg { animation: agent-bera-float 3.2s ease-in-out infinite; }
+        .agent-bera-dot { animation: agent-bera-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+      `}</style>
       <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight"><WandSparkles className="h-6 w-6 text-primary" /> Agent Bera</h1>
+        <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight">
+          <span className="agent-bera-mark relative inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-md">
+            <WandSparkles className="h-5 w-5" />
+            <span className="agent-bera-dot absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent" />
+          </span>
+          Agent Bera
+        </h1>
         <p className="text-muted-foreground mt-1">Describe the app you want in plain language. Agent Bera plans it, writes the full-stack code (Node/Express backend + API-driven frontend), boots it in a sandbox and tests every API endpoint before anything is published, then deploys it here on BERAHOST and checks the live result.</p>
       </div>
 
@@ -120,6 +150,19 @@ export default function AgentBeraPage() {
               maxLength={2000}
               disabled={githubConnected === false}
             />
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="agent-bera-env">Environment variables <span className="font-normal text-muted-foreground">(optional)</span></label>
+              <Textarea
+                id="agent-bera-env"
+                value={envText}
+                onChange={(e) => setEnvText(e.target.value)}
+                placeholder={"DATABASE_URL=postgres://user:pass@host:5432/dbname\nAPI_KEY=..."}
+                rows={3}
+                disabled={githubConnected === false}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">One KEY=value per line. Give the app a real database with DATABASE_URL (Postgres) and the agent will code against it, run its endpoint tests with these variables, and deploy with them. Values are stored with the deployment and never shown again — only the names appear on the build.</p>
+            </div>
             <div className="flex items-center gap-3">
               <Button type="submit" disabled={busy || githubConnected === false}>
                 {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
@@ -158,6 +201,11 @@ export default function AgentBeraPage() {
                 {b.error && <p className="text-sm text-destructive">{b.error}</p>}
                 {b.plan?.endpoints && b.plan.endpoints.length > 0 && (
                   <p className="text-xs text-muted-foreground">API: {b.plan.endpoints.map((e) => `${e.method} ${e.path}`).join(" · ")}</p>
+                )}
+                {b.envVarKeys && b.envVarKeys.length > 0 && (
+                  <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">Variables:
+                    {b.envVarKeys.map((k) => <span key={k} className="rounded-full border border-border bg-muted/30 px-2 py-0.5 font-mono text-[11px]">{k}</span>)}
+                  </p>
                 )}
                 {b.testResults && (
                   <p className="text-xs">

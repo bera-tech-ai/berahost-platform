@@ -34,6 +34,9 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     status: live && ["deploying", "verifying"].includes(build.status) ? "live" : build.status,
     error: build.error,
     plan: build.plan ?? null,
+    // Only the variable NAMES are ever returned — values are secrets and
+    // stay server-side (sandbox tests + the deployment's env).
+    envVarKeys: build.envVars && typeof build.envVars === "object" ? Object.keys(build.envVars) : [],
     testResults: build.testResults ?? null,
     liveCheck: build.liveCheck ?? null,
     buildLog: build.buildLog ?? null,
@@ -81,8 +84,25 @@ router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise
     return;
   }
 
+  // Optional environment variables for the built app (e.g. DATABASE_URL).
+  // The agent plans and codes around the variable NAMES; the values are
+  // passed to the sandbox endpoint tests and stored on the deployment,
+  // and are never returned by the API again.
+  let envVars: Record<string, string> = {};
+  if (req.body?.envVars !== undefined) {
+    const raw = req.body.envVars;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) { res.status(400).json({ error: "envVars must be an object of KEY: value pairs." }); return; }
+    const entries = Object.entries(raw as Record<string, unknown>);
+    if (entries.length > 30) { res.status(400).json({ error: "At most 30 environment variables per build." }); return; }
+    for (const [key, value] of entries) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) { res.status(400).json({ error: `Invalid environment variable name: ${key}` }); return; }
+      if (typeof value !== "string" || value.length > 4096) { res.status(400).json({ error: `Invalid value for ${key} — values are text up to 4,096 characters.` }); return; }
+      envVars[key] = value;
+    }
+  }
+
   const name = prompt.replace(/\s+/g, " ").slice(0, 60);
-  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning" }).returning();
+  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars }).returning();
   runAgentBuild(build.id).catch((err) => logger.error({ err, buildId: build.id }, "Agent Bera build crashed"));
   res.status(202).json(serialize(build, null));
 });

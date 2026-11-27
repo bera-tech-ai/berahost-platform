@@ -14,6 +14,7 @@
 // browser runtime is installed rather than pretending it ran.
 
 import { spawn, type ChildProcess } from "child_process";
+import { builtinModules } from "module";
 import fs from "fs/promises";
 import path from "path";
 import type { AgentEndpointTest } from "./agentAi";
@@ -70,6 +71,28 @@ async function syntaxChecks(dir: string, files: Record<string, string>): Promise
       results.push({ name: `Complete: ${rel}`, ok, detail: ok ? "complete HTML document" : "HTML document looks truncated" });
     }
   }
+  // Undeclared-dependency check: a require() of a package that is not in
+  // package.json passes syntax checks and installs fine, then crashes the
+  // server at boot (the generator once produced require('axios')). Catch
+  // it statically so the failure is named precisely for the repair loop.
+  let declared: Set<string> = new Set();
+  try { declared = new Set(Object.keys(JSON.parse(files["package.json"] || "{}").dependencies || {})); } catch { /* parse check already reported */ }
+  const builtins = new Set(builtinModules.flatMap(m => [m, m.replace(/^node:/, "")]));
+  for (const rel of Object.keys(files)) {
+    if (!rel.endsWith(".js")) continue;
+    const requires = new Set<string>();
+    for (const match of files[rel].matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      const spec = match[1];
+      if (spec.startsWith(".") || spec.startsWith("/")) continue;
+      const pkg = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+      if (!builtins.has(pkg) && !builtins.has(spec)) requires.add(pkg);
+    }
+    for (const pkg of requires) {
+      if (!declared.has(pkg)) {
+        results.push({ name: `Dependency: ${pkg} (${rel})`, ok: false, detail: `'${pkg}' is required by ${rel} but is not declared in package.json — remove the require or use an allowed package` });
+      }
+    }
+  }
   return results;
 }
 
@@ -86,9 +109,47 @@ async function waitForServer(port: number, child: ChildProcess, timeoutMs = 2500
   return false;
 }
 
-export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[]): Promise<TestReport> {
+// Static route-presence checks derived from the plan: for a planned
+// get-one like GET /api/bookings/1, server.js must register the
+// parameterised route '/api/bookings/:'. A missing route otherwise shows
+// up only as an unexplained 404 in the live tests.
+export function routeChecks(files: Record<string, string>, tests: AgentEndpointTest[]): CheckResult[] {
+  const code = String(files["server.js"] || "");
+  const out: CheckResult[] = [];
+  for (const t of tests) {
+    const m = t.path.match(/^(\/api\/[a-z0-9-]+)\/(\d+)$/i);
+    if (t.method === "GET" && m) {
+      const prefix = `${m[1]}/:`;
+      const ok = code.includes(prefix);
+      out.push({ name: `Route: GET ${m[1]}/:id`, ok, detail: ok ? "get-one route registered" : `server.js never registers a get-one route like app.get('${m[1]}/:id', ...) — implement it with store.get(Number(req.params.id))` });
+    }
+  }
+  return out;
+}
+
+export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[], env: Record<string, string> = {}): Promise<TestReport> {
   const results: CheckResult[] = [];
   let log = "";
+  const envKeys = Object.keys(env);
+  if (envKeys.length) log += `\n[env] sandbox running with variables: ${envKeys.join(", ")} (values never logged)\n`;
+  // Store wiring check: the store must be required once at the top of
+  // server.js — a require inside one handler leaves `store` undefined in
+  // the others, which crashes the server on the first POST (seen live).
+  const serverCode = String(files["server.js"] || "");
+  const storeReqIdx = serverCode.search(/const\s+store\s*=\s*require\(['"]\.\/lib\/store['"]\)/);
+  const firstRouteIdx = serverCode.search(/app\.(get|post|put|patch|delete|use)\(/);
+  const storeWired = storeReqIdx >= 0 && (firstRouteIdx < 0 || storeReqIdx < firstRouteIdx);
+  results.push({ name: "Store wiring", ok: storeWired, detail: storeWired ? "store required once at the top of server.js" : "server.js must require('./lib/store') once at the top of the file, before any route" });
+  if (!storeWired) return { ok: false, results, log, testedAt: new Date().toISOString() };
+  // Database wiring check: when the build provides DATABASE_URL, the
+  // backend must actually read it — a server that silently uses its own
+  // localhost defaults passes syntax checks and then fails every boot.
+  if (env.DATABASE_URL) {
+    const wired = Object.values(files).some(c => String(c).includes("DATABASE_URL"));
+    results.push({ name: "Database wiring", ok: wired, detail: wired ? "the data store reads process.env.DATABASE_URL" : "DATABASE_URL was provided but no project file reads it" });
+    if (!wired) return { ok: false, results, log, testedAt: new Date().toISOString() };
+  }
+  results.push(...routeChecks(files, tests));
   results.push(...await syntaxChecks(dir, files));
   if (results.some(r => !r.ok)) return { ok: false, results, log, testedAt: new Date().toISOString() };
 
@@ -99,12 +160,12 @@ export async function testProject(dir: string, files: Record<string, string>, te
 
   const port = 20000 + Math.floor(Math.random() * 20000);
   let serverOut = "";
-  const child = spawn(process.execPath, ["server.js"], { cwd: dir, env: { ...process.env, PORT: String(port), NODE_ENV: "test" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["server.js"], { cwd: dir, env: { ...process.env, ...env, PORT: String(port), NODE_ENV: "test" }, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
   child.stderr?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
   try {
     const up = await waitForServer(port, child);
-    results.push({ name: "Server boots", ok: up, detail: up ? `listening on port ${port}` : "server did not answer /api/health in time" });
+    results.push({ name: "Server boots", ok: up, detail: up ? `listening on port ${port}` : `server did not answer /api/health in time — output: ${tail(serverOut, 300)}` });
     if (!up) { log += "\n[server]\n" + tail(serverOut, 2000); return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() }; }
 
     for (const t of tests) {

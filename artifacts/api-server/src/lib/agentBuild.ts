@@ -44,23 +44,30 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     const token = decryptGithubToken(user?.githubAccessTokenEncrypted);
     if (!user || !token) throw new Error("GitHub is not connected for this account. Connect GitHub, then start the build again.");
 
+    // The user's environment variables for this app (e.g. DATABASE_URL).
+    // The agent plans and codes around the NAMES; the values go to the
+    // sandbox tests and the deployment, and are never logged or returned.
+    const envVars: Record<string, string> = build.envVars && typeof build.envVars === "object" && !Array.isArray(build.envVars) ? build.envVars as Record<string, string> : {};
+    const envKeys = Object.keys(envVars);
+
     // 1. Plan
     await setBuild(buildId, { status: "planning" });
-    const plan: AgentProjectPlan = await planProject(build.prompt);
+    const plan: AgentProjectPlan = await planProject(build.prompt, envKeys);
     await setBuild(buildId, { plan, name: plan.appName || build.name });
     await note(`Plan: ${plan.appName} — ${plan.endpoints.length} API endpoints (${plan.endpoints.map(e => `${e.method} ${e.path}`).join(", ")})`);
+    if (envKeys.length) await note(`Environment variables provided: ${envKeys.join(", ")}`);
 
     // 2. Generate the full-stack project
     await setBuild(buildId, { status: "generating" });
     const base = slugify(plan.appName || build.prompt.split(/\s+/).slice(0, 5).join(" "));
-    const files = await generateProjectFiles(build.prompt, plan, base);
+    const files = await generateProjectFiles(build.prompt, plan, base, envKeys);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes
     await setBuild(buildId, { status: "testing" });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bera-"));
     await writeProjectFiles(tmpDir, files);
-    let report = await testProject(tmpDir, files, plan.endpoints);
+    let report = await testProject(tmpDir, files, plan.endpoints, envVars);
     await setBuild(buildId, { testResults: report });
     await note(`Endpoint tests: ${report.results.filter(r => r.ok).length}/${report.results.length} checks passed`);
     // Repair loop: always repair from the BEST version seen so far, and
@@ -69,11 +76,11 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     let bestFiles = { ...files };
     let bestReport = report;
     const score = (r: TestReport) => r.results.filter(x => x.ok).length;
-    for (let round = 1; round <= 2 && !bestReport.ok; round++) {
+    for (let round = 1; round <= 3 && !bestReport.ok; round++) {
       await note(`Repair round ${round}: fixing the failing checks in the backend`);
-      const candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport)) };
+      const candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"] });
-      report = await testProject(tmpDir, candidate, plan.endpoints);
+      report = await testProject(tmpDir, candidate, plan.endpoints, envVars);
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
       await setBuild(buildId, { testResults: bestReport });
@@ -96,7 +103,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     }
     if (!repo) throw new Error(`GitHub repo creation failed: ${lastError?.message || "unknown error"}`);
     files["package.json"] = JSON.stringify({ ...JSON.parse(files["package.json"]), name: repo.name }, null, 2);
-    for (const pathInRepo of ["package.json", "server.js", "public/index.html", "README.md"]) {
+    for (const pathInRepo of Object.keys(files)) {
       await createRepositoryFile(token, repo.fullName, pathInRepo, files[pathInRepo], `Add ${pathInRepo} (built by Agent Bera)`);
     }
     await setBuild(buildId, { repoUrl: `https://github.com/${repo.fullName}`, repoFullName: repo.fullName });
@@ -117,7 +124,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
       slug: generateSlug(),
       buildCommand: null,
       startCommand: "node server.js",
-      envVars: {},
+      envVars,
       expiresAt: user.subscriptionExpiresAt,
       status: "queued",
       autoDeploy: false

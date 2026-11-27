@@ -18,6 +18,7 @@ export const agentBuildsTable = pgTable("agent_builds", {
   status: varchar("status", { length: 20 }).default("planning").notNull(),
   error: text("error"),
   plan: jsonb("plan"),
+  envVars: jsonb("env_vars"),
   testResults: jsonb("test_results"),
   liveCheck: jsonb("live_check"),
   buildLog: text("build_log"),
