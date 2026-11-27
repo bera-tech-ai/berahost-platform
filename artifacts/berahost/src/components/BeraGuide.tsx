@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { io } from "socket.io-client";
-import { GUIDE_VIDEO_SRC, GUIDE_POSTER_SRC } from "./bera-guide-assets";
+import AgentFace, { TypingDots } from "./agent-face";
+import { GUIDE_POSTER_SRC as GUIDE_POSTER } from "./bera-guide-assets";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -16,54 +17,6 @@ interface Message {
   content: string;
 }
 
-function BeraFace({ talking, thinking }: { talking: boolean; thinking: boolean }) {
-  // The guide wears Jeeves' face: the same looping avatar video Muse
-  // uses, clipped into the guide's ring — so it genuinely moves (it is
-  // a video, not a drawing). The still poster shows while it loads and
-  // if a browser refuses autoplay.
-  return (
-    <div
-      className="relative w-14 h-14 flex items-center justify-center"
-      style={talking ? { animation: "guideTalk 0.45s ease-in-out infinite alternate" } : undefined}
-    >
-      {/* Outer glow ring */}
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "conic-gradient(from 0deg, #00d4ff, #7c3aed, #00d4ff)",
-          animation: thinking ? "spin 1.2s linear infinite" : "spin 4s linear infinite",
-          padding: "2px",
-        }}
-      />
-      <div className="absolute inset-[2px] rounded-full overflow-hidden bg-[#0a0f1e]">
-        <video
-          src={GUIDE_VIDEO_SRC}
-          poster={GUIDE_POSTER_SRC}
-          autoPlay
-          loop
-          muted
-          playsInline
-          draggable={false}
-          className="h-full w-full object-cover"
-        />
-      </div>
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
-        }
-        @keyframes guideTalk {
-          from { transform: scale(1); }
-          to   { transform: scale(1.06); }
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 0.4; transform: scale(0.85); }
-          50%       { opacity: 1;   transform: scale(1.15); }
-        }
-      `}</style>
-    </div>
-  );
-}
 
 export function BeraGuide() {
   const { data: user } = useGetMe();
@@ -81,6 +34,30 @@ export function BeraGuide() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [talking, setTalking] = useState(false);
+  // Agent Bera build activity, broadcast by the Agent Bera page while a
+  // build runs — the guide mirrors it so the user sees the face working
+  // (fast ring, typing dots, stage label) wherever they are.
+  const [buildActivity, setBuildActivity] = useState<{ active: boolean; stage?: string }>({ active: false });
+  useEffect(() => {
+    const STALE_MS = 20000;
+    const read = () => {
+      try {
+        const raw = sessionStorage.getItem("bera-build-activity");
+        if (!raw) return { active: false };
+        const parsed = JSON.parse(raw);
+        if (!parsed?.active || Date.now() - Number(parsed.ts || 0) > STALE_MS) return { active: false };
+        return { active: true, stage: parsed.stage as string | undefined };
+      } catch { return { active: false }; }
+    };
+    setBuildActivity(read());
+    const onEvent = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      setBuildActivity(detail.active ? { active: true, stage: detail.stage } : { active: false });
+    };
+    window.addEventListener("bera-build-activity", onEvent as EventListener);
+    const timer = window.setInterval(() => setBuildActivity(read()), 5000);
+    return () => { window.removeEventListener("bera-build-activity", onEvent as EventListener); window.clearInterval(timer); };
+  }, []);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -187,7 +164,7 @@ export function BeraGuide() {
         >
           {/* Header */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border/30 bg-gradient-to-r from-primary/10 to-secondary/10">
-            <img src={GUIDE_POSTER_SRC} alt="Bera Guide" className="w-8 h-8 rounded-full object-cover border border-primary/40" />
+            <img src={GUIDE_POSTER} alt="Bera Guide" className="w-8 h-8 rounded-full object-cover border border-primary/40" />
             <div className="flex-1">
               <p className="text-sm font-bold text-primary font-mono">BERA GUIDE</p>
               <p className="text-[10px] text-muted-foreground font-mono">
@@ -268,7 +245,13 @@ export function BeraGuide() {
         className="relative focus:outline-none group"
         title="BERA Guide"
       >
-        <BeraFace talking={talking} thinking={thinking} />
+        <AgentFace size={56} talking={talking} working={thinking || buildActivity.active} />
+        {/* Working pill — visible without hovering while Agent Bera builds */}
+        {buildActivity.active && !open && (
+          <span className="absolute right-16 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-mono text-primary bg-[#080e1d]/95 border border-primary/40 rounded-full px-2.5 py-1 flex items-center gap-2">
+            Agent Bera is working · {({ planning: "Planning", generating: "Building", testing: "Testing APIs", publishing: "Publishing", deploying: "Deploying", verifying: "Live check" } as Record<string, string>)[buildActivity.stage || ""] || "Working"} <TypingDots />
+          </span>
+        )}
         {/* Tooltip label */}
         {!open && (
           <span className="absolute right-16 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-mono text-primary bg-[#080e1d]/90 border border-primary/30 rounded-full px-2 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">

@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import GithubTokenConnect from "@/components/github-token-connect";
+import AgentFace, { TypingDots } from "@/components/agent-face";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -156,6 +157,19 @@ export default function AgentBeraPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // The first build still in flight drives this page's living face and
+  // is broadcast to the Bera Guide, which mirrors the working state
+  // (fast ring, typing dots, stage) in its corner of every page.
+  const activeBuild = builds.find(b => b.status !== "live" && b.status !== "failed");
+  useEffect(() => {
+    const detail = activeBuild ? { active: true, stage: activeBuild.status } : { active: false };
+    try {
+      if (activeBuild) sessionStorage.setItem("bera-build-activity", JSON.stringify({ ...detail, ts: Date.now() }));
+      else sessionStorage.removeItem("bera-build-activity");
+    } catch { /* storage unavailable — the event below still lands */ }
+    window.dispatchEvent(new CustomEvent("bera-build-activity", { detail }));
+  }, [activeBuild?.id, activeBuild?.status]);
+
   const connectGithub = () => { window.location.href = `${BASE}api/auth/github?mode=connect&returnTo=/agent-bera`; };
 
   const submit = async (event: FormEvent) => {
@@ -202,12 +216,14 @@ export default function AgentBeraPage() {
       `}</style>
       <div>
         <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight">
-          <span className="agent-bera-mark relative inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-md">
-            <WandSparkles className="h-5 w-5" />
-            <span className="agent-bera-dot absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent" />
-          </span>
+          <AgentFace size={40} working={!!activeBuild} />
           Agent Bera
         </h1>
+        {activeBuild && (
+          <p className="mt-1 flex items-center gap-2 text-sm text-primary">
+            Agent Bera is working — {STAGE_LABELS[activeBuild.status] || activeBuild.status} <TypingDots />
+          </p>
+        )}
         <p className="text-muted-foreground mt-1">Describe the app you want in plain language. Agent Bera plans it, writes the full-stack code (Node/Express backend + API-driven frontend), boots it in a sandbox and tests every API endpoint before anything is published, then deploys it here on BERAHOST and checks the live result.</p>
       </div>
 
