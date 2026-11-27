@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Trophy,
   Users,
+  WandSparkles,
 } from "lucide-react";
 import { useGetMe, useLogout } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ const workspaceLinks = [
   { name: "Teams", href: "/teams", icon: Users },
   { name: "GitHub deploy", href: "/github", icon: Github },
   { name: "Web hosting", href: "/web-deployments", icon: Globe2 },
+  { name: "Agent Bera", href: "/agent-bera", icon: WandSparkles },
 ];
 const growthLinks = [
   { name: "Leaderboard", href: "/leaderboard", icon: Trophy },

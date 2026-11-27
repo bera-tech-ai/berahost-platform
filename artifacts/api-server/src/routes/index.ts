@@ -20,6 +20,7 @@ import logsearchRouter from "./logsearch";
 import referralsRouter from "./referrals";
 import guideRouter from "./guide";
 import webDeploymentsRouter from "./webDeployments";
+import agentBeraRouter from "./agentBera";
 
 const router: IRouter = Router();
 
@@ -28,6 +29,7 @@ router.use(authRouter);
 router.use(botsRouter);
 router.use(deploymentsRouter);
 router.use(webDeploymentsRouter);
+router.use(agentBeraRouter);
 router.use(coinsRouter);
 router.use(paymentsRouter);
 router.use(subscriptionsRouter);
