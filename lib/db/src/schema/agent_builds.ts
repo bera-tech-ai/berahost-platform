@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, jsonb, timestamp, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -22,6 +22,12 @@ export const agentBuildsTable = pgTable("agent_builds", {
   testResults: jsonb("test_results"),
   liveCheck: jsonb("live_check"),
   buildLog: text("build_log"),
+  // An edit build points at the build it modifies and reuses its repo
+  // and deployment instead of creating new ones.
+  parentId: integer("parent_id"),
+  // True when the user asked for a platform-provisioned database; its
+  // DATABASE_URL is generated server-side and stored in envVars.
+  builtinDb: boolean("builtin_db").default(false).notNull(),
   repoUrl: text("repo_url"),
   repoFullName: varchar("repo_full_name", { length: 255 }),
   webDeploymentId: integer("web_deployment_id"),

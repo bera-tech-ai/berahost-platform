@@ -133,10 +133,16 @@ export type AgentEndpointTest = {
   expected?: number[];
 };
 
+export type AgentResourcePlan = {
+  name: string;
+  endpoints: AgentEndpointTest[];
+};
+
 export type AgentProjectPlan = {
   appName: string;
   summary: string;
   resource: string;
+  resources: AgentResourcePlan[];
   endpoints: AgentEndpointTest[];
 };
 
@@ -174,16 +180,18 @@ export function fallbackPlan(promptText: string): AgentProjectPlan {
     : /contact|message|enquir|inquir/.test(p) ? "messages"
     : "items";
   const appName = promptText.replace(/\s+/g, " ").trim().slice(0, 60) || "My App";
+  const endpoints: AgentEndpointTest[] = [
+    { name: "Health check", method: "GET", path: "/api/health", expected: [200] },
+    { name: `List ${resource}`, method: "GET", path: `/api/${resource}`, expected: [200] },
+    { name: `Create ${resource}`, method: "POST", path: `/api/${resource}`, body: { name: "Sample", price: 100, description: "Created by the Agent Bera endpoint test" }, expected: [200, 201] },
+    { name: `Get one ${resource}`, method: "GET", path: `/api/${resource}/1`, expected: [200] }
+  ];
   return {
     appName,
     summary: `Full-stack app for: ${promptText.slice(0, 160)}`,
     resource,
-    endpoints: [
-      { name: "Health check", method: "GET", path: "/api/health", expected: [200] },
-      { name: `List ${resource}`, method: "GET", path: `/api/${resource}`, expected: [200] },
-      { name: `Create ${resource}`, method: "POST", path: `/api/${resource}`, body: { name: "Sample", price: 100, description: "Created by the Agent Bera endpoint test" }, expected: [200, 201] },
-      { name: `Get one ${resource}`, method: "GET", path: `/api/${resource}/1`, expected: [200] }
-    ]
+    resources: [{ name: resource, endpoints: endpoints.slice(1) }],
+    endpoints
   };
 }
 
@@ -198,27 +206,38 @@ export async function planProject(promptText: string, envKeys: string[] = []): P
   try {
     const raw = await agentChat(
       "System: You are Agent Bera's project planner. Reply with ONLY a JSON object, no markdown, no commentary.\n" +
-      "Shape: {\"appName\": string, \"summary\": string, \"resource\": string (one lowercase plural word for the main data collection, e.g. products), \"endpoints\": [{\"name\": string, \"method\": \"GET|POST|PUT|PATCH|DELETE\", \"path\": \"/api/...\", \"body\": object (POST/PUT only, realistic sample data), \"expected\": [status codes]}]}\n" +
-      "Rules: 4-7 endpoints. Always include GET /api/health first. Include a list endpoint, a create endpoint with a realistic sample body, and a get-one endpoint using a concrete id like /api/products/1 (the app seeds data, so id 1 must exist). Paths must be concrete — no :params or placeholders.\n" +
+      "Shape: {\"appName\": string, \"summary\": string, \"resources\": [{\"name\": string (one lowercase plural word for a data collection, e.g. products), \"endpoints\": [{\"name\": string, \"method\": \"GET|POST|PUT|PATCH|DELETE\", \"path\": \"/api/...\", \"body\": object (POST/PUT only, realistic sample data), \"expected\": [status codes]}]}]}\n" +
+      "Rules: plan 1-3 resources — use MORE THAN ONE when the app naturally has several kinds of data (e.g. a gym has members AND payments AND checkins; a school has students AND fees). Each resource gets a list endpoint, a create endpoint with a realistic sample body, and a get-one endpoint using a concrete id like /api/products/1 (the app seeds data, so id 1 must exist). Add update/delete endpoints where they are natural. Keep the TOTAL across all resources to at most 10 endpoints. Paths must be concrete — no :params or placeholders.\n" +
       (envKeys.length ? `\nThe app will run with these environment variables available (names only): ${envKeys.join(", ")}. Plan the data layer around them (e.g. DATABASE_URL means a real Postgres database).\n` : "") +
       "\nUser: Plan a full-stack web app for this request: " + promptText,
       90000);
     const parsed = extractJsonObject(raw);
     if (!parsed) return fallbackPlan(promptText);
     const seen = new Set<string>();
-    const endpoints = (Array.isArray(parsed.endpoints) ? parsed.endpoints : [])
+    const cleanEndpoints = (list: any): AgentEndpointTest[] => (Array.isArray(list) ? list : [])
       .map(sanitizeEndpoint).filter(Boolean)
-      .filter((e: any) => { const k = `${(e as AgentEndpointTest).method} ${(e as AgentEndpointTest).path}`; if (seen.has(k)) return false; seen.add(k); return true; })
-      .slice(0, 8) as AgentEndpointTest[];
-    if (endpoints.length < 2) return fallbackPlan(promptText);
-    if (!endpoints.some(e => e.path === "/api/health")) {
-      endpoints.unshift({ name: "Health check", method: "GET", path: "/api/health", expected: [200] });
+      .filter((e: any) => { const k = `${(e as AgentEndpointTest).method} ${(e as AgentEndpointTest).path}`; if (seen.has(k)) return false; seen.add(k); return true; }) as AgentEndpointTest[];
+    let resources: AgentResourcePlan[] = [];
+    if (Array.isArray(parsed.resources) && parsed.resources.length) {
+      resources = parsed.resources.slice(0, 3).map((r: any) => ({
+        name: String(r?.name || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items",
+        endpoints: cleanEndpoints(r?.endpoints)
+      })).filter((r: AgentResourcePlan) => r.endpoints.length > 0);
     }
-    const resource = String(parsed.resource || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items";
+    if (!resources.length && Array.isArray(parsed.endpoints)) {
+      // Single-resource shape from earlier planner versions.
+      const resource = String(parsed.resource || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items";
+      resources = [{ name: resource, endpoints: cleanEndpoints(parsed.endpoints).filter(e => e.path !== "/api/health") }];
+    }
+    if (!resources.length || resources.every(r => r.endpoints.length === 0)) return fallbackPlan(promptText);
+    const endpoints: AgentEndpointTest[] = [{ name: "Health check", method: "GET", path: "/api/health", expected: [200] },
+      ...resources.flatMap(r => r.endpoints).filter(e => e.path !== "/api/health")].slice(0, 11);
+    if (endpoints.length < 3) return fallbackPlan(promptText);
     return {
       appName: String(parsed.appName || "").replace(/\s+/g, " ").trim().slice(0, 60) || fallbackPlan(promptText).appName,
       summary: String(parsed.summary || "").replace(/\s+/g, " ").trim().slice(0, 240),
-      resource,
+      resource: resources[0].name,
+      resources,
       endpoints
     };
   } catch {
@@ -267,7 +286,8 @@ const BACKEND_RULES = [
   "- app.use(express.json()) and serve the frontend with express.static(path.join(__dirname, 'public')). NEVER use body-parser — Express already includes it as express.json() / express.urlencoded().",
   "- Implement GET /api/health returning JSON {ok:true}.",
   "- DATA LAYER IS PROVIDED: the project already contains lib/store.js exporting an async store — init(seedItems), list(), get(id), create(data), update(id, data), remove(id). NEVER write SQL, NEVER create a database pool, NEVER keep your own array as the store. Require it exactly like this: const store = require('./lib/store');",
-  "- Define const SEED = [...] with at least 3 realistic items as plain objects (NO id field — the store assigns ids 1, 2, 3). Start inside an async function: await store.init(SEED) BEFORE app.listen, so GET /api/<resource>/1 returns the first seeded item.",
+  "- MULTI-RESOURCE APPS: when the plan has several resources, use ONE collection per resource: const orders = store.collection('orders'); — every collection has the SAME async init/list/get/create/update/remove interface. The default store methods (store.list() etc.) serve the FIRST resource; name a collection for each additional one.",
+  "- Define a SEED array per resource (const SEED = [...] for the first, const SEED_<RESOURCE> = [...] for the others) with at least 3 realistic items each as plain objects (NO id field — the store assigns ids 1, 2, 3). Start inside an async function: await the init of EVERY collection BEFORE app.listen, so GET /api/<resource>/1 returns the first seeded item of each resource.",
   "- Require the store ONCE at the very top of the file (const store = require('./lib/store');) — NEVER inside a route handler, and never re-require it. Every store method is async: ALWAYS await store calls. store.create(data) and store.update(id, data) return the item object directly (update returns null when missing) — there is NO { data, error } wrapper.",
   "- Wrap EVERY route handler body in try { ... } catch (e) { res.status(500).json({ error: 'internal error' }); } — a throwing async handler crashes the whole server and fails the build.",
   "- Validation: only check the exact fields present in the plan's sample POST body, and accept that body — never require fields the plan does not use.",
@@ -291,10 +311,9 @@ const BACKEND_RULES = [
 export const GENERATED_STORE = `'use strict';
 // Data store provided by Agent Bera — do not edit; server.js builds on it.
 // Postgres (DATABASE_URL) when available, in-memory otherwise.
+// A default collection (init/list/get/create/update/remove) plus named
+// collections via store.collection('orders') for multi-resource apps.
 let pool = null;
-let dbReady = false;
-let memory = [];
-let nextId = 1;
 async function db() {
   if (!pool) {
     const { Pool } = require('pg');
@@ -302,78 +321,96 @@ async function db() {
   }
   return pool;
 }
-async function init(seedItems) {
-  const seeds = Array.isArray(seedItems) ? seedItems : [];
-  if (process.env.DATABASE_URL) {
-    try {
-      const p = await db();
-      await p.query('CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT now())');
-      const found = await p.query('SELECT COUNT(*)::int AS n FROM items');
-      if (found.rows[0].n === 0) {
-        for (let i = 0; i < seeds.length; i++) {
-          await p.query('INSERT INTO items (id, data) VALUES ($1, $2)', [i + 1, JSON.stringify(seeds[i])]);
+function tableFor(name) {
+  const clean = String(name || 'items').toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40) || 'items';
+  return clean === 'items' ? 'items' : 'items_' + clean;
+}
+function makeCollection(name) {
+  const table = tableFor(name);
+  let dbReady = false;
+  let memory = [];
+  let nextId = 1;
+  async function init(seedItems) {
+    const seeds = Array.isArray(seedItems) ? seedItems : [];
+    if (process.env.DATABASE_URL) {
+      try {
+        const p = await db();
+        await p.query('CREATE TABLE IF NOT EXISTS ' + table + ' (id SERIAL PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT now())');
+        const found = await p.query('SELECT COUNT(*)::int AS n FROM ' + table);
+        if (found.rows[0].n === 0) {
+          for (let i = 0; i < seeds.length; i++) {
+            await p.query('INSERT INTO ' + table + ' (id, data) VALUES ($1, $2)', [i + 1, JSON.stringify(seeds[i])]);
+          }
+          if (seeds.length) await p.query("SELECT setval(pg_get_serial_sequence('" + table + "', 'id'), (SELECT MAX(id) FROM " + table + "))");
         }
-        if (seeds.length) await p.query("SELECT setval(pg_get_serial_sequence('items', 'id'), (SELECT MAX(id) FROM items))");
+        dbReady = true;
+        return;
+      } catch (e) {
+        console.error('[store] database unavailable for ' + table + ', using memory instead:', e.message);
+        dbReady = false;
       }
-      dbReady = true;
-      return;
-    } catch (e) {
-      console.error('[store] database unavailable, using memory instead:', e.message);
-      dbReady = false;
     }
+    memory = seeds.map((item, i) => ({ id: i + 1, ...item }));
+    nextId = memory.length + 1;
   }
-  memory = seeds.map((item, i) => ({ id: i + 1, ...item }));
-  nextId = memory.length + 1;
-}
-async function list() {
-  if (dbReady) {
-    const p = await db();
-    const r = await p.query('SELECT id, data FROM items ORDER BY id ASC');
-    return r.rows.map(row => ({ id: row.id, ...row.data }));
+  async function list() {
+    if (dbReady) {
+      const p = await db();
+      const r = await p.query('SELECT id, data FROM ' + table + ' ORDER BY id ASC');
+      return r.rows.map(row => ({ id: row.id, ...row.data }));
+    }
+    return [...memory];
   }
-  return [...memory];
-}
-async function get(id) {
-  if (dbReady) {
-    const p = await db();
-    const r = await p.query('SELECT id, data FROM items WHERE id = $1', [id]);
-    return r.rows.length ? { id: r.rows[0].id, ...r.rows[0].data } : null;
+  async function get(id) {
+    if (dbReady) {
+      const p = await db();
+      const r = await p.query('SELECT id, data FROM ' + table + ' WHERE id = $1', [id]);
+      return r.rows.length ? { id: r.rows[0].id, ...r.rows[0].data } : null;
+    }
+    return memory.find(item => item.id === Number(id)) || null;
   }
-  return memory.find(item => item.id === Number(id)) || null;
-}
-async function create(data) {
-  if (dbReady) {
-    const p = await db();
-    const r = await p.query('INSERT INTO items (data) VALUES ($1) RETURNING id', [JSON.stringify(data || {})]);
-    return { id: r.rows[0].id, ...(data || {}) };
+  async function create(data) {
+    if (dbReady) {
+      const p = await db();
+      const r = await p.query('INSERT INTO ' + table + ' (data) VALUES ($1) RETURNING id', [JSON.stringify(data || {})]);
+      return { id: r.rows[0].id, ...(data || {}) };
+    }
+    const item = { id: nextId++, ...(data || {}) };
+    memory.push(item);
+    return item;
   }
-  const item = { id: nextId++, ...(data || {}) };
-  memory.push(item);
-  return item;
-}
-async function update(id, data) {
-  if (dbReady) {
-    const p = await db();
-    const r = await p.query('UPDATE items SET data = data || $2::jsonb WHERE id = $1 RETURNING id, data', [id, JSON.stringify(data || {})]);
-    return r.rows.length ? { id: r.rows[0].id, ...r.rows[0].data } : null;
+  async function update(id, data) {
+    if (dbReady) {
+      const p = await db();
+      const r = await p.query('UPDATE ' + table + ' SET data = data || $2::jsonb WHERE id = $1 RETURNING id, data', [id, JSON.stringify(data || {})]);
+      return r.rows.length ? { id: r.rows[0].id, ...r.rows[0].data } : null;
+    }
+    const idx = memory.findIndex(item => item.id === Number(id));
+    if (idx < 0) return null;
+    memory[idx] = { ...memory[idx], ...(data || {}), id: memory[idx].id };
+    return memory[idx];
   }
-  const idx = memory.findIndex(item => item.id === Number(id));
-  if (idx < 0) return null;
-  memory[idx] = { ...memory[idx], ...(data || {}), id: memory[idx].id };
-  return memory[idx];
-}
-async function remove(id) {
-  if (dbReady) {
-    const p = await db();
-    const r = await p.query('DELETE FROM items WHERE id = $1', [id]);
-    return r.rowCount > 0;
+  async function remove(id) {
+    if (dbReady) {
+      const p = await db();
+      const r = await p.query('DELETE FROM ' + table + ' WHERE id = $1', [id]);
+      return r.rowCount > 0;
+    }
+    const idx = memory.findIndex(item => item.id === Number(id));
+    if (idx < 0) return false;
+    memory.splice(idx, 1);
+    return true;
   }
-  const idx = memory.findIndex(item => item.id === Number(id));
-  if (idx < 0) return false;
-  memory.splice(idx, 1);
-  return true;
+  return { init, list, get, create, update, remove };
 }
-module.exports = { init, list, get, create, update, remove };
+const collections = new Map();
+function collection(name) {
+  const key = tableFor(name);
+  if (!collections.has(key)) collections.set(key, makeCollection(name));
+  return collections.get(key);
+}
+const main = collection('items');
+module.exports = { init: main.init, list: main.list, get: main.get, create: main.create, update: main.update, remove: main.remove, collection };
 `;
 
 function backendRules(envKeys: string[]): string {
@@ -431,8 +468,15 @@ export async function jsParses(code: string): Promise<boolean> {
   finally { await fs.rm(file, { force: true }).catch(() => {}); }
 }
 
+function endpointListText(plan: AgentProjectPlan, withBodies: boolean): string {
+  const line = (e: AgentEndpointTest) => `- ${e.method} ${e.path}${withBodies && e.body ? " (JSON body fields: " + Object.keys(e.body).join(", ") + ")" : ""}`;
+  if (!plan.resources || plan.resources.length <= 1) return plan.endpoints.map(line).join("\n");
+  return plan.resources.map(r => `Resource "${r.name}" (data: store.collection('${r.name}')):\n` + r.endpoints.map(line).join("\n")).join("\n\n") +
+    "\n\nAlso: GET /api/health";
+}
+
 export async function generateBackendServer(promptText: string, plan: AgentProjectPlan, envKeys: string[] = []): Promise<string> {
-  const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}${e.body ? " (JSON body fields: " + Object.keys(e.body).join(", ") + ")" : ""}`).join("\n");
+  const endpointList = endpointListText(plan, true);
   let code = await stitchCode(
     "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + "\n\nEndpoints to implement:\n" + endpointList,
     "server.js",
@@ -456,7 +500,7 @@ export async function generateBackendServer(promptText: string, plan: AgentProje
 }
 
 export async function repairBackendServer(promptText: string, plan: AgentProjectPlan, currentCode: string, failureText: string, envKeys: string[] = []): Promise<string> {
-  const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
+  const endpointList = endpointListText(plan, false);
   // When the failure is a syntax error, the current file is poison as a
   // reference — repairs anchored on it kept reproducing the breakage in
   // testing. Regenerate cleanly instead, with the error named.
@@ -507,11 +551,73 @@ export async function generateFrontend(promptText: string, plan: AgentProjectPla
   return html;
 }
 
+// An independent reviewer pass over the generated backend: a separate AI
+// call whose only job is to find defects (missing endpoints, wrong status
+// codes, store misuse) before the deterministic test gate runs. Advisory
+// only — the sandbox gate stays the decider — but it catches design-level
+// mistakes the endpoint tests would only surface as bare 404s.
+export async function reviewBackendServer(plan: AgentProjectPlan, serverCode: string): Promise<string[]> {
+  try {
+    const raw = await agentChat(
+      "System: You are a strict, independent code reviewer for Node.js/Express backends. Reply with ONLY a JSON object: {\"issues\": [string, ...]} — at most 6 short, concrete defects, or an empty array if the code is correct.\n" +
+      "Check ONLY these things: (1) every planned endpoint is implemented with the exact method and path; (2) get-one routes use a parameterised path like /api/<resource>/:id; (3) the provided lib/store is required once at the top and every store/collection call is awaited; (4) each resource in the plan uses its own store collection; (5) create answers 201, missing items answer 404; (6) GET /api/health exists; (7) no require() of packages other than express and Node built-ins. Do NOT comment on style, naming or anything else.\n\n" +
+      "Planned endpoints:\n" + endpointListText(plan, false) + "\n\nserver.js:\n" + serverCode.slice(0, 9000),
+      90000);
+    const parsed = extractJsonObject(raw);
+    if (!parsed || !Array.isArray(parsed.issues)) return [];
+    return parsed.issues.map((x: any) => String(x).slice(0, 300)).filter(Boolean).slice(0, 6);
+  } catch { return []; }
+}
+
+// Apply a follow-up instruction to an EXISTING app ("make the header
+// blue", "add a phone field to orders"). Each file is edited separately
+// and validated on its own — a file whose edit fails validation keeps its
+// current version, so an edit can never make the app worse.
+export async function editProjectFiles(instruction: string, plan: AgentProjectPlan, current: { server: string; frontend: string }, envKeys: string[] = []): Promise<{ server: string; frontend: string }> {
+  let server = current.server;
+  try {
+    let code = await stitchCode(
+      "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary +
+      "\n\nApply this change to the app: " + instruction +
+      "\n\nReturn the COMPLETE updated server.js. Keep every working endpoint and all working behaviour exactly as it is — change only what the instruction requires.\n\nEndpoints in the plan:\n" + endpointListText(plan, false) +
+      "\n\nCurrent server.js:\n" + current.server.slice(0, 9000),
+      "server.js",
+      (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
+    code = stripProseAroundCode(normalizeServerCode(code));
+    if (code.includes("express") && code.includes("/api/health") && (await jsParses(code))) server = code;
+  } catch { /* keep the current backend */ }
+  let frontend = current.frontend;
+  try {
+    const html = await stitchCode(
+      "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary +
+      "\n\nApply this change to the app's page: " + instruction +
+      "\n\nReturn the COMPLETE updated HTML file. Keep everything else about the page exactly as it is — change only what the instruction requires.\n\nCurrent public/index.html:\n" + current.frontend.slice(0, 11000),
+      "HTML",
+      (c) => looksComplete(c),
+      8);
+    if (looksComplete(html)) frontend = html;
+  } catch { /* keep the current frontend */ }
+  return { server, frontend };
+}
+
 export async function generateProjectFiles(promptText: string, plan: AgentProjectPlan, packageName: string, envKeys: string[] = []): Promise<Record<string, string>> {
-  let server: string;
-  try { server = await generateBackendServer(promptText, plan, envKeys); }
-  catch { server = await generateBackendServer(promptText, plan, envKeys); }
-  const frontend = await generateFrontend(promptText, plan);
+  const genBackend = async (): Promise<string> => {
+    try { return await generateBackendServer(promptText, plan, envKeys); }
+    catch { return await generateBackendServer(promptText, plan, envKeys); }
+  };
+  // Backend and frontend are independent files — generate them in
+  // parallel instead of one after the other.
+  const [generatedServer, frontend] = await Promise.all([genBackend(), generateFrontend(promptText, plan)]);
+  let server = generatedServer;
+  // Independent reviewer pass: fix design-level defects before the gate.
+  const issues = await reviewBackendServer(plan, server);
+  if (issues.length) {
+    try {
+      const repaired = await repairBackendServer(promptText, plan, server,
+        "An independent reviewer found these defects in the generated backend:\n" + issues.map(i => "- " + i).join("\n"), envKeys);
+      if ((await jsParses(repaired)) && repaired.includes("/api/health")) server = repaired;
+    } catch { /* keep the original; the sandbox gate decides */ }
+  }
   const endpointDocs = plan.endpoints.map(e => `- \`${e.method} ${e.path}\``).join("\n");
   // pg is always declared: lib/store.js requires it lazily, only when
   // DATABASE_URL is actually set at runtime.
@@ -528,6 +634,6 @@ export async function generateProjectFiles(promptText: string, plan: AgentProjec
     "server.js": server + "\n\n// Safety net added by Agent Bera: a throwing handler must not kill the app.\nprocess.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', e && e.message); });\n",
     "lib/store.js": GENERATED_STORE,
     "public/index.html": frontend,
-    "README.md": `# ${plan.appName}\n\nBuilt with Agent Bera on BERAHOST from the prompt:\n\n> ${promptText}\n\n## API\n\n${endpointDocs}\n\n## Run\n\n\`\`\`\nnpm install\nnpm start\n\`\`\`\n\nThe server listens on \`process.env.PORT\`. Data is seeded in memory and resets on restart.\n`
+    "README.md": `# ${plan.appName}\n\nBuilt with Agent Bera on BERAHOST from the prompt:\n\n> ${promptText}\n\n## API\n\n${endpointDocs}\n\n## Run\n\n\`\`\`\nnpm install\nnpm start\n\`\`\`\n\nThe server listens on \`process.env.PORT\`. Data is stored in Postgres when DATABASE_URL is set, otherwise in memory (resetting on restart).\n`
   };
 }

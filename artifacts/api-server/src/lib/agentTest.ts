@@ -27,7 +27,7 @@ export type LiveCheckReport = {
   status?: number;
   title?: string;
   checks: CheckResult[];
-  browser: { available: boolean; ok?: boolean; detail: string; consoleErrors?: string[] };
+  browser: { available: boolean; ok?: boolean; detail: string; consoleErrors?: string[]; screenshot?: string };
   checkedAt: string;
 };
 
@@ -205,32 +205,60 @@ async function fetchCheck(name: string, url: string, expectStatuses: number[]): 
 
 async function browserTier(url: string): Promise<LiveCheckReport["browser"]> {
   const dynamicImport = (spec: string) => (Function("s", "return import(s)") as any)(spec);
-  // Playwright first, then Puppeteer — whichever the host provides.
-  try {
-    const pw = await dynamicImport("playwright");
-    const browser = await pw.chromium.launch({ args: ["--no-sandbox"] });
+  // Shared page run for any puppeteer/playwright-shaped browser: load the
+  // page, collect JS errors, measure the rendered text (a page that loads
+  // but renders nothing is a failure the HTTP checks cannot see), and
+  // capture a screenshot for the build card.
+  const runWithPage = async (browser: any): Promise<LiveCheckReport["browser"]> => {
     try {
       const page = await browser.newPage();
       const errors: string[] = [];
       page.on("pageerror", (e: any) => errors.push(String(e?.message || e)));
       page.on("console", (msg: any) => { if (msg.type() === "error") errors.push(msg.text()); });
-      await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
-      return { available: true, ok: errors.length === 0, detail: errors.length === 0 ? "Page loaded in headless Chromium with no JS errors" : `Page loaded with ${errors.length} JS error(s)`, consoleErrors: errors.slice(0, 5) };
+      try { await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 }); }
+      catch { await page.goto(url, { timeout: 30000 }); }
+      const text: string = await page.evaluate(() => (document.body?.innerText || "").trim()).catch(() => "");
+      let screenshot: string | undefined;
+      try {
+        const shot = await page.screenshot({ type: "png" });
+        screenshot = "data:image/png;base64," + Buffer.from(shot as any).toString("base64");
+      } catch { /* screenshot is a bonus; the checks above still count */ }
+      const blank = text.length < 20;
+      const ok = errors.length === 0 && !blank;
+      const detail = blank
+        ? "Page loaded in a real browser but rendered almost no content (blank page)"
+        : errors.length === 0
+          ? "Page loaded in a real browser with no JS errors and visible content"
+          : `Page loaded with ${errors.length} JS error(s)`;
+      return { available: true, ok, detail, consoleErrors: errors.slice(0, 5), screenshot };
     } finally { await browser.close().catch(() => {}); }
+  };
+  // 1. The Chromium bundled WITH the platform (@sparticuz/chromium +
+  // puppeteer-core are api-server dependencies, so this tier is always
+  // installed — the live check no longer depends on the host's setup).
+  try {
+    const chromium = (await dynamicImport("@sparticuz/chromium")).default;
+    const puppeteer = (await dynamicImport("puppeteer-core")).default;
+    const browser = await puppeteer.launch({
+      args: [...(chromium.args || []), "--no-sandbox"],
+      executablePath: await chromium.executablePath(),
+      headless: true,
+      defaultViewport: chromium.defaultViewport || { width: 1280, height: 800 }
+    });
+    return await runWithPage(browser);
+  } catch { /* bundled runtime failed — try host-provided browsers */ }
+  // 2. Playwright, then full Puppeteer, if the host provides them.
+  try {
+    const pw = await dynamicImport("playwright");
+    const browser = await pw.chromium.launch({ args: ["--no-sandbox"] });
+    return await runWithPage(browser);
   } catch { /* not installed — try puppeteer */ }
   try {
     const pp = await dynamicImport("puppeteer");
     const browser = await pp.launch({ args: ["--no-sandbox"] });
-    try {
-      const page = await browser.newPage();
-      const errors: string[] = [];
-      page.on("pageerror", (e: any) => errors.push(String(e?.message || e)));
-      page.on("console", (msg: any) => { if (msg.type() === "error") errors.push(msg.text()); });
-      await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-      return { available: true, ok: errors.length === 0, detail: errors.length === 0 ? "Page loaded in headless Chrome with no JS errors" : `Page loaded with ${errors.length} JS error(s)`, consoleErrors: errors.slice(0, 5) };
-    } finally { await browser.close().catch(() => {}); }
+    return await runWithPage(browser);
   } catch { /* not installed either */ }
-  return { available: false, detail: "No headless browser runtime (Playwright/Puppeteer) is installed on the BeraHost host, so the browser tier was skipped — the HTTP + API live checks above still ran. Install Playwright on the host to enable full browser checks." };
+  return { available: false, detail: "The bundled Chromium runtime failed to start on this host and no Playwright/Puppeteer fallback is installed, so the browser tier was skipped — the HTTP + API live checks above still ran." };
 }
 
 export async function runLiveCheck(publicUrl: string, tests: AgentEndpointTest[]): Promise<LiveCheckReport> {
@@ -248,5 +276,8 @@ export async function runLiveCheck(publicUrl: string, tests: AgentEndpointTest[]
   const sample = tests.find(t => t.method === "GET" && t.path.startsWith("/api/") && t.path !== "/api/health");
   if (sample) checks.push((await fetchCheck(`Live API endpoint ${sample.path}`, base + sample.path, sample.expected?.length ? sample.expected : [200])).result);
   const browser = await browserTier(publicUrl);
+  if (browser.available) {
+    checks.push({ name: "Browser render check", ok: Boolean(browser.ok), detail: browser.detail + (browser.consoleErrors?.length ? ` — ${browser.consoleErrors.join(" | ")}` : "") });
+  }
   return { ok: checks.every(c => c.ok), url: publicUrl, status: page.result.status, title, checks, browser, checkedAt: new Date().toISOString() };
 }

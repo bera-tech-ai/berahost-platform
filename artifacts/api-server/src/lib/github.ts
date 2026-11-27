@@ -160,6 +160,30 @@ export async function createRepositoryFile(accessToken: string, fullName: string
   }));
 }
 
+// Read a file back from a repo (used by Agent Bera's edit flow, which
+// starts from the app's currently published code).
+export async function getRepositoryFile(accessToken: string, fullName: string, pathInRepo: string): Promise<{ content: string; sha: string } | null> {
+  const safePath = pathInRepo.split("/").map(encodeURIComponent).join("/");
+  const response = await githubRequest(`${repoPath(fullName)}/contents/${safePath}`, accessToken);
+  if (response.status === 404) return null;
+  const body = await readGithubJson(response);
+  if (!body || typeof body.content !== "string" || typeof body.sha !== "string") return null;
+  return { content: Buffer.from(body.content, "base64").toString("utf8"), sha: String(body.sha) };
+}
+
+// Create or update a file in one call (the Contents API needs the current
+// blob sha to update). Used to push repaired/edited files into an
+// existing app's repo.
+export async function upsertRepositoryFile(accessToken: string, fullName: string, pathInRepo: string, content: string, message: string): Promise<void> {
+  const existing = await getRepositoryFile(accessToken, fullName, pathInRepo).catch(() => null);
+  const safePath = pathInRepo.split("/").map(encodeURIComponent).join("/");
+  await readGithubJson(await githubRequest(`${repoPath(fullName)}/contents/${safePath}`, accessToken, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, content: Buffer.from(content, "utf8").toString("base64"), ...(existing ? { sha: existing.sha } : {}) }),
+  }));
+}
+
 export async function getGithubRepository(accessToken: string, fullName: string): Promise<GithubRepository> {
   const repo = await readGithubJson(await githubRequest(repoPath(fullName), accessToken));
   return { id: Number(repo.id), fullName: String(repo.full_name), name: String(repo.name), ownerLogin: String(repo.owner?.login || ""), private: Boolean(repo.private), htmlUrl: String(repo.html_url), defaultBranch: String(repo.default_branch || "main"), description: repo.description ? String(repo.description) : null, updatedAt: repo.updated_at ? String(repo.updated_at) : null };

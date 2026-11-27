@@ -38,6 +38,8 @@ async function buildAll() {
       "fsevents",
       "zod",
       "re2",
+      "@sparticuz/chromium",
+      "puppeteer-core",
       "farmhash",
       "xxhash-addon",
       "bufferutil",
