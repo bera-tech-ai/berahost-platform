@@ -17,6 +17,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { builtinModules } from "module";
 import fs from "fs/promises";
 import path from "path";
+import { undeclaredSeedNames } from "./agentAi";
 import type { AgentEndpointTest } from "./agentAi";
 
 export type CheckResult = { name: string; ok: boolean; detail: string; status?: number };
@@ -100,6 +101,33 @@ async function syntaxChecks(dir: string, files: Record<string, string>): Promise
   return results;
 }
 
+// Smoke-load every dependency declared in the sandbox's package.json.
+// An npm install that exits 0 can still leave a corrupted tree (seen
+// live: the `debug` package half-installed, so express died with
+// MODULE_NOT_FOUND only at boot). Loading each package once here turns
+// that into a precise, repairable failure instead of a dead server.
+async function smokeLoadDeps(dir: string): Promise<{ ok: boolean; detail: string }> {
+  let deps: string[] = [];
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8"));
+    deps = Object.keys(pkg.dependencies || {});
+  } catch {
+    return { ok: true, detail: "no readable package.json — nothing to smoke-load" };
+  }
+  if (!deps.length) return { ok: true, detail: "no runtime dependencies declared" };
+  const script = [
+    "const { createRequire } = require('module');",
+    "const req = createRequire(process.argv[1]);",
+    "const bad = [];",
+    "for (const d of process.argv.slice(2)) { try { req(d); } catch (e) { bad.push(d + ': ' + String((e && e.message) || e)); } }",
+    "if (bad.length) { console.error(bad.join(' | ')); process.exit(1); }"
+  ].join("\n");
+  const r = await runCmd(process.execPath, ["-e", script, path.join(dir, "package.json"), ...deps], dir, 60000);
+  return r.code === 0
+    ? { ok: true, detail: `all ${deps.length} declared dependencies load (${deps.join(", ")})` }
+    : { ok: false, detail: tail(r.output.trim(), 400) || "a dependency failed to load" };
+}
+
 async function waitForServer(port: number, child: ChildProcess, timeoutMs = 25000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -154,6 +182,20 @@ export async function testProject(dir: string, files: Record<string, string>, te
     if (!wired) return { ok: false, results, log, testedAt: new Date().toISOString() };
   }
   results.push(...routeChecks(files, tests));
+  // Seed declarations check: the generator sometimes passes SEED /
+  // SEED_<RESOURCE> to store.init without declaring the arrays — a
+  // runtime ReferenceError no syntax check can see. Generation injects
+  // missing declarations deterministically (see agentAi), so this only
+  // fails for a shape the normalizer could not map; naming the exact
+  // identifier gives the repair loop a precise target.
+  const undeclaredSeeds = undeclaredSeedNames(serverCode);
+  results.push({
+    name: "Seed declarations",
+    ok: undeclaredSeeds.length === 0,
+    detail: undeclaredSeeds.length === 0
+      ? "every SEED array the code uses is declared"
+      : `server.js uses ${undeclaredSeeds.join(", ")} without declaring ${undeclaredSeeds.length === 1 ? "it" : "them"} — declare each as a const array of at least 3 seed items near the top of the file`
+  });
   results.push(...await syntaxChecks(dir, files));
   if (results.some(r => !r.ok)) return { ok: false, results, log, testedAt: new Date().toISOString() };
 
@@ -161,6 +203,33 @@ export async function testProject(dir: string, files: Record<string, string>, te
   log += "\n[npm install]\n" + tail(install.output, 1500);
   results.push({ name: "Install dependencies", ok: install.code === 0, detail: install.code === 0 ? "npm install succeeded" : tail(install.output, 500) });
   if (install.code !== 0) return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() };
+
+  // Install integrity: verify the installed tree actually loads before
+  // blaming the app for a boot failure. A corrupt tree earns ONE clean
+  // reinstall (node_modules wiped) — only a tree that still cannot load
+  // afterwards fails the gate here.
+  const integrity = await smokeLoadDeps(dir);
+  if (integrity.ok) {
+    results.push({ name: "Install integrity", ok: true, detail: integrity.detail });
+  } else {
+    log += `\n[install integrity] dependency smoke-load failed (${integrity.detail}) — wiping node_modules and reinstalling once\n`;
+    await fs.rm(path.join(dir, "node_modules"), { recursive: true, force: true }).catch(() => {});
+    const reinstall = await runCmd("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], dir, 240000);
+    log += "\n[npm install — clean reinstall]\n" + tail(reinstall.output, 1500);
+    if (reinstall.code !== 0) {
+      results.push({ name: "Install integrity", ok: false, detail: `dependency smoke-load failed (${integrity.detail}) and the clean reinstall also failed: ${tail(reinstall.output, 300)}` });
+      return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() };
+    }
+    const retry = await smokeLoadDeps(dir);
+    results.push({
+      name: "Install integrity",
+      ok: retry.ok,
+      detail: retry.ok
+        ? `the first install was corrupt (${integrity.detail}); a clean reinstall loads correctly`
+        : `dependencies still fail to load after a clean reinstall: ${retry.detail}`
+    });
+    if (!retry.ok) return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() };
+  }
 
   const port = 20000 + Math.floor(Math.random() * 20000);
   let serverOut = "";

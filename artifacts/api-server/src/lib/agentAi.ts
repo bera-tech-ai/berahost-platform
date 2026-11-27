@@ -269,12 +269,13 @@ function trimOverlap(existing: string, cont: string): string {
   return cont;
 }
 
-// Generate one code file, stitching continuations until `isComplete` says
-// the file is finished (the chat endpoints truncate long replies).
-async function stitchCode(firstPrompt: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds = 5): Promise<string> {
-  let code = stripAnyFences(await agentChat(firstPrompt, 150000));
-  for (let i = 0; i < maxRounds && !isComplete(code); i++) {
-    const tail = code.slice(-1500);
+// Continue an existing partial file: ask for continuations and stitch
+// them on until `isComplete` says the file is finished (the chat
+// endpoints truncate long replies, so a file rarely arrives whole).
+async function continueStitching(code: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds: number): Promise<string> {
+  let out = code;
+  for (let i = 0; i < maxRounds && !isComplete(out); i++) {
+    const tail = out.slice(-1500);
     let cont = stripAnyFences(await agentChat(
       `System: You are continuing a single ${fileLabel} file you were writing. Output ONLY the continuation of the code — no markdown fences, no explanations, do NOT restart the file and do NOT repeat anything already written. Do NOT redeclare any variable, function or constant that already exists earlier in the file. Finish the whole file completely.\n\nUser: The file so far ends with this exact text:\n...\n${tail}\n\nContinue exactly from where that text stops.`,
       150000));
@@ -287,9 +288,16 @@ async function stitchCode(firstPrompt: string, fileLabel: string, isComplete: (c
         150000));
       if (!cont) break;
     }
-    code += trimOverlap(code, cont);
+    out += trimOverlap(out, cont);
   }
-  return code.trim();
+  return out.trim();
+}
+
+// Generate one code file, stitching continuations until `isComplete` says
+// the file is finished (the chat endpoints truncate long replies).
+async function stitchCode(firstPrompt: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds = 5): Promise<string> {
+  const first = stripAnyFences(await agentChat(firstPrompt, 150000));
+  return continueStitching(first, fileLabel, isComplete, maxRounds);
 }
 
 const BACKEND_RULES = [
@@ -435,12 +443,206 @@ function backendRules(envKeys: string[]): string {
   return rules;
 }
 
+// --- Seed declaration guarantee --------------------------------------------
+// The backend rules tell the model to define `const SEED = [...]` (first
+// resource) and `const SEED_<RESOURCE> = [...]` (the rest) and pass them
+// to store.init(...). A live build shipped code that USED SEED without
+// ever declaring it: node --check passed, then the server died at boot
+// with "SEED is not defined" and three AI repair rounds never fixed it.
+// Like the store itself, the seed arrays are too important to leave to
+// the model: when the code references a seed name it never declares, the
+// declaration is injected deterministically, built from the plan's own
+// sample data (the same bodies the endpoint tests exercise).
+
+// Blank out string literals, template text, regex literals and comments
+// (positions and newlines preserved) so identifier scans see code, not
+// prose. Template ${ } expressions stay visible — they are real code.
+// Regex literals are recognised with the usual previous-token heuristic.
+function maskNonCode(code: string): string {
+  const out = code.split("");
+  const blank = (idx: number) => { if (out[idx] !== "\n" && out[idx] !== "\r") out[idx] = " "; };
+  const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "case", "delete", "void", "in", "of", "new", "instanceof", "yield", "await", "else", "do"]);
+  let state: "code" | "sq" | "dq" | "tpl" | "line" | "block" | "regex" = "code";
+  const exprDepths: number[] = []; // brace depth of each open template ${ }
+  let regexClass = false;
+  let lastSig = "";
+  let lastWord = "";
+  const regexAllowed = (): boolean => {
+    if (!lastSig) return true;
+    if (/[\w$]/.test(lastSig)) return KEYWORDS_BEFORE_REGEX.has(lastWord);
+    if (lastSig === ")" || lastSig === "]" || lastSig === "}" || lastSig === "'" || lastSig === '"' || lastSig === "`") return false;
+    return true;
+  };
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const n = i + 1 < code.length ? code[i + 1] : "";
+    if (state === "code") {
+      if (c === "/" && n === "/") { blank(i); blank(i + 1); i += 2; state = "line"; continue; }
+      if (c === "/" && n === "*") { blank(i); blank(i + 1); i += 2; state = "block"; continue; }
+      if (c === "'") { blank(i); i++; state = "sq"; continue; }
+      if (c === '"') { blank(i); i++; state = "dq"; continue; }
+      if (c === "`") { blank(i); i++; state = "tpl"; continue; }
+      if (c === "/" && regexAllowed()) { blank(i); i++; state = "regex"; regexClass = false; continue; }
+      if (c === "{") {
+        if (exprDepths.length) exprDepths[exprDepths.length - 1]++;
+        lastSig = c; lastWord = ""; i++; continue;
+      }
+      if (c === "}") {
+        if (exprDepths.length) {
+          exprDepths[exprDepths.length - 1]--;
+          if (exprDepths[exprDepths.length - 1] === 0) { exprDepths.pop(); blank(i); i++; state = "tpl"; continue; }
+        }
+        lastSig = c; lastWord = ""; i++; continue;
+      }
+      if (!/\s/.test(c)) {
+        lastSig = c;
+        lastWord = /[\w$]/.test(c) ? (lastWord + c).slice(-16) : "";
+      }
+      i++;
+      continue;
+    }
+    if (state === "line") {
+      if (c === "\n") state = "code"; else blank(i);
+      i++;
+      continue;
+    }
+    if (state === "block") {
+      if (c === "*" && n === "/") { blank(i); blank(i + 1); i += 2; state = "code"; lastSig = "/"; lastWord = ""; continue; }
+      blank(i); i++;
+      continue;
+    }
+    if (state === "sq" || state === "dq") {
+      const quote = state === "sq" ? "'" : '"';
+      if (c === "\\") { blank(i); if (i + 1 < code.length) blank(i + 1); i += 2; continue; }
+      blank(i); i++;
+      if (c === quote) { state = "code"; lastSig = quote; lastWord = ""; }
+      continue;
+    }
+    if (state === "tpl") {
+      if (c === "\\") { blank(i); if (i + 1 < code.length) blank(i + 1); i += 2; continue; }
+      if (c === "`") { blank(i); i++; state = "code"; lastSig = "`"; lastWord = ""; continue; }
+      if (c === "$" && n === "{") { blank(i); blank(i + 1); i += 2; exprDepths.push(1); state = "code"; lastSig = "{"; lastWord = ""; continue; }
+      blank(i); i++;
+      continue;
+    }
+    // state === "regex"
+    if (c === "\\") { blank(i); if (i + 1 < code.length) blank(i + 1); i += 2; continue; }
+    if (c === "[") regexClass = true;
+    if (c === "]") regexClass = false;
+    blank(i); i++;
+    if (c === "/" && !regexClass) {
+      state = "code";
+      while (i < code.length && /[a-z]/i.test(code[i])) i++; // flags
+      lastSig = "x"; lastWord = "";
+    }
+  }
+  return out.join("");
+}
+
+const SEED_NAME_RE = "(SEED(?:_[A-Za-z0-9]+)?)";
+
+// Seed identifiers the code USES but never declares with const/let/var.
+// Exported for the sandbox gate (agentTest) so a shape the normalizer
+// cannot map still fails with the identifier named, not a boot crash.
+export function undeclaredSeedNames(code: string): string[] {
+  const masked = maskNonCode(code);
+  const declared = new Set<string>();
+  for (const m of masked.matchAll(new RegExp(`(?<![\\w$.])(?:const|let|var)\\s+${SEED_NAME_RE}\\b`, "g"))) declared.add(m[1]);
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const m of masked.matchAll(new RegExp(`(?<![\\w$.])${SEED_NAME_RE}\\b`, "g"))) {
+    const name = m[1];
+    if (!declared.has(name) && !seen.has(name)) { seen.add(name); missing.push(name); }
+  }
+  return missing;
+}
+
+// Seed items for one resource, from the plan: three items built on the
+// create endpoint's sample body (ids stripped — the store assigns them),
+// with the name/title field suffixed so items 2 and 3 read as distinct
+// entries. Without a POST sample, a single item from any other sample
+// body; without any sample, a single empty object. Never throws on odd
+// plan shapes — a build must not die in the normalizer.
+function seedItemsForResource(resource: AgentResourcePlan): any[] {
+  try {
+    const bodies = (resource.endpoints || []).filter(e => e.body && typeof e.body === "object" && Object.keys(e.body).length > 0);
+    const post = bodies.find(e => e.method === "POST");
+    if (post?.body) {
+      const base: Record<string, any> = { ...post.body };
+      delete base.id;
+      const keys = Object.keys(base);
+      const nameKey = keys.find(k => /name|title/i.test(k) && typeof base[k] === "string") ?? keys.find(k => typeof base[k] === "string");
+      const clone = (suffix: string): Record<string, any> => {
+        const o = { ...base };
+        if (suffix && nameKey) o[nameKey] = String(o[nameKey]) + suffix;
+        return o;
+      };
+      return [clone(""), clone(" 2"), clone(" 3")];
+    }
+    const sample = bodies[0]?.body;
+    if (sample) {
+      const o: Record<string, any> = { ...sample };
+      delete o.id;
+      return [o];
+    }
+  } catch { /* fall through to the generic item */ }
+  return [{}];
+}
+
+function seedDeclarationItems(name: string, plan?: AgentProjectPlan): any[] {
+  const resources = plan?.resources || [];
+  if (resources.length) {
+    let resource: AgentResourcePlan | undefined;
+    if (name === "SEED") resource = resources[0];
+    else {
+      const suffix = name.slice("SEED_".length).toUpperCase();
+      resource = resources.find(r => String(r.name || "").toUpperCase() === suffix);
+    }
+    if (resource) return seedItemsForResource(resource);
+  }
+  return [{}];
+}
+
+// Where injected declarations go: just after the leading 'use strict'
+// line and the top-of-file require block (single-line requires), else
+// the very top of the file. The injected consts are pure JSON literals,
+// so any of these positions evaluates before every use that matters
+// (init calls happen after the requires in generated code).
+function seedInjectionOffset(code: string): number {
+  const maskedLines = maskNonCode(code).split("\n");
+  const rawLines = code.split("\n");
+  let offset = 0;
+  let insertAt = 0;
+  for (let idx = 0; idx < maskedLines.length; idx++) {
+    const line = maskedLines[idx];
+    // 'use strict' is classified on the raw line: masking blanks its
+    // quotes, which would hide it. Requires are classified on the masked
+    // line so a "require(" inside a string cannot fake a require block.
+    const isStrict = /^\s*['"]use strict['"];?\s*$/.test(rawLines[idx] || "");
+    const requireMatch = line.match(/^\s*(?:(?:const|let|var)\s+[^=;]+=\s*)?require\s*\((.*)\)\s*;?\s*$/);
+    const isRequireLine = requireMatch !== null && !requireMatch[1].includes("(");
+    if (line.trim() === "" || isStrict || isRequireLine) { offset += line.length + 1; insertAt = offset; continue; }
+    break;
+  }
+  return Math.min(insertAt, code.length);
+}
+
+export function ensureSeedDeclarations(code: string, plan?: AgentProjectPlan): string {
+  const missing = undeclaredSeedNames(code);
+  if (!missing.length) return code;
+  const decls = missing.map(name => `const ${name} = ${JSON.stringify(seedDeclarationItems(name, plan))};`).join("\n");
+  const block = `\n// Seed data guaranteed by Agent Bera: the generated code used these\n// arrays without declaring them, so they are built from the plan.\n${decls}\n`;
+  const at = seedInjectionOffset(code);
+  return code.slice(0, at) + block + code.slice(at);
+}
+
 // Deterministic cleanup for a known generator habit: the model loves
 // require('body-parser') even though Express ships the same functions
 // built in (this exact habit broke a Bera AI build in Nov 2026). The
 // rewrite is mechanical and safe: drop the require, point its calls at
 // express.* equivalents.
-export function normalizeServerCode(code: string): string {
+export function normalizeServerCode(code: string, plan?: AgentProjectPlan): string {
   let out = code;
   const varMatch = out.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*['"]body-parser['"]\s*\)\s*;?/);
   if (varMatch) {
@@ -449,6 +651,7 @@ export function normalizeServerCode(code: string): string {
     out = out.replace(new RegExp(`\\b${name}\\.(json|urlencoded|text|raw)\\(`, "g"), "express.$1(");
   }
   out = out.replace(/require\(\s*['"]body-parser['"]\s*\)\.(json|urlencoded|text|raw)\(/g, "express.$1(");
+  out = ensureSeedDeclarations(out, plan);
   return out;
 }
 
@@ -495,7 +698,7 @@ export async function generateBackendServer(promptText: string, plan: AgentProje
     "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? `\n\nEXTERNAL API: this app integrates with ${plan.externalApi.url}, available as process.env.EXTERNAL_API_URL. Call it SERVER-SIDE with fetch (e.g. to list or fetch the external data behind this app's own endpoints), shaping the response for the frontend. What that URL returned when the platform explored it:\n---\n${plan.externalApi.excerpt}\n---\nIf an external call fails at runtime, answer 502 with a JSON error — never crash. Data the user creates in THIS app still goes through the provided store.` : "") + "\n\nEndpoints to implement:\n" + endpointList,
     "server.js",
     (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
-  code = stripProseAroundCode(normalizeServerCode(code));
+  code = stripProseAroundCode(normalizeServerCode(code, plan));
   if (!code.includes("express") || !code.includes("/api/health")) {
     throw new Error("The generated backend was incomplete, so nothing was published. Please try again.");
   }
@@ -506,7 +709,7 @@ export async function generateBackendServer(promptText: string, plan: AgentProje
       const retry = stripProseAroundCode(normalizeServerCode(await stitchCode(
         "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + "\n\nEndpoints to implement:\n" + endpointList + "\n\nIMPORTANT: the previous attempt was syntactically invalid JavaScript. Write clean, simple, valid code. Output ONLY code.",
         "server.js",
-        (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500)));
+        (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500), plan));
       if ((await jsParses(retry)) && retry.includes("/api/health")) code = retry;
     } catch { /* keep the first attempt; the sandbox gate decides */ }
   }
@@ -529,7 +732,7 @@ export async function repairBackendServer(promptText: string, plan: AgentProject
     "\n\nEndpoints to implement:\n" + endpointList + instruction,
     "server.js",
     (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
-  code = stripProseAroundCode(normalizeServerCode(code));
+  code = stripProseAroundCode(normalizeServerCode(code, plan));
   if (!code.includes("express") || !code.includes("/api/health")) {
     throw new Error("The repaired backend was still incomplete.");
   }
@@ -550,7 +753,7 @@ const FRONTEND_RULES = [
   "- The file MUST be complete: end with </body></html>."
 ].join("\n");
 
-export async function generateFrontend(promptText: string, plan: AgentProjectPlan): Promise<string> {
+export async function generateFrontend(promptText: string, plan: AgentProjectPlan, log?: (line: string) => void | Promise<void>): Promise<string> {
   const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
   const attempt = () => stitchCode(
     "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? "\n\nNote: some data comes from an external API, but it ALWAYS reaches this page through the app's own backend endpoints listed below — never call the external API from the browser." : "") + "\n\nBackend API endpoints available:\n" + endpointList,
@@ -558,9 +761,23 @@ export async function generateFrontend(promptText: string, plan: AgentProjectPla
     (c) => looksComplete(c),
     8);
   let html = await attempt();
-  // Fresh regenerations if stitching still left the file unfinished —
-  // a new attempt usually completes where a truncated one could not.
-  for (let i = 0; i < 2 && !looksComplete(html); i++) html = await attempt();
+  // Persistence, up to 3 total attempts: a page that comes back
+  // truncated (the chat endpoints cap every reply, so a long page can
+  // exhaust one run's continuation rounds) is CONTINUED from where it
+  // stopped before anything is regenerated from scratch — and every
+  // incomplete attempt is written to the build log, so a build that
+  // dies here shows the struggle instead of a silent gap after the
+  // plan line (seen live on a 2-resource coffee-house build).
+  for (let attemptNo = 2; attemptNo <= 3 && !looksComplete(html); attemptNo++) {
+    await log?.(`Frontend generation attempt ${attemptNo - 1} incomplete (no closing </html>), continuing…`);
+    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8);
+    if (looksComplete(continued)) { html = continued; break; }
+    if (continued.length > html.length) html = continued;
+    // Fresh regeneration as this attempt's other half — kept only when
+    // it finishes the page or gets further than the partial we hold.
+    const fresh = await attempt();
+    if (looksComplete(fresh) || fresh.length > html.length) html = fresh;
+  }
   if (!looksComplete(html)) throw new Error("The generated frontend came back incomplete, so nothing was published. Please try again.");
   return html;
 }
@@ -597,7 +814,7 @@ export async function editProjectFiles(instruction: string, plan: AgentProjectPl
       "\n\nCurrent server.js:\n" + current.server.slice(0, 9000),
       "server.js",
       (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
-    code = stripProseAroundCode(normalizeServerCode(code));
+    code = stripProseAroundCode(normalizeServerCode(code, plan));
     if (code.includes("express") && code.includes("/api/health") && (await jsParses(code))) server = code;
   } catch { /* keep the current backend */ }
   let frontend = current.frontend;
@@ -614,14 +831,14 @@ export async function editProjectFiles(instruction: string, plan: AgentProjectPl
   return { server, frontend };
 }
 
-export async function generateProjectFiles(promptText: string, plan: AgentProjectPlan, packageName: string, envKeys: string[] = []): Promise<Record<string, string>> {
+export async function generateProjectFiles(promptText: string, plan: AgentProjectPlan, packageName: string, envKeys: string[] = [], log?: (line: string) => void | Promise<void>): Promise<Record<string, string>> {
   const genBackend = async (): Promise<string> => {
     try { return await generateBackendServer(promptText, plan, envKeys); }
     catch { return await generateBackendServer(promptText, plan, envKeys); }
   };
   // Backend and frontend are independent files — generate them in
   // parallel instead of one after the other.
-  const [generatedServer, frontend] = await Promise.all([genBackend(), generateFrontend(promptText, plan)]);
+  const [generatedServer, frontend] = await Promise.all([genBackend(), generateFrontend(promptText, plan, log)]);
   let server = generatedServer;
   // Independent reviewer pass: fix design-level defects before the gate.
   const issues = await reviewBackendServer(plan, server);

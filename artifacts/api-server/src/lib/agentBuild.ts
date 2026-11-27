@@ -182,7 +182,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     // 2. Generate the full-stack project
     await setBuild(buildId, { status: "generating" });
     const base = slugify(plan.appName || build.prompt.split(/\s+/).slice(0, 5).join(" "));
-    const files = await generateProjectFiles(build.prompt, plan, base, envKeys);
+    const files = await generateProjectFiles(build.prompt, plan, base, envKeys, note);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes
