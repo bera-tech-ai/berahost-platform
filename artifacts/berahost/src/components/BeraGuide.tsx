@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { io } from "socket.io-client";
+import { GUIDE_VIDEO_SRC, GUIDE_POSTER_SRC } from "./bera-guide-assets";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -16,8 +17,15 @@ interface Message {
 }
 
 function BeraFace({ talking, thinking }: { talking: boolean; thinking: boolean }) {
+  // The guide wears Jeeves' face: the same looping avatar video Muse
+  // uses, clipped into the guide's ring — so it genuinely moves (it is
+  // a video, not a drawing). The still poster shows while it loads and
+  // if a browser refuses autoplay.
   return (
-    <div className="relative w-14 h-14 flex items-center justify-center">
+    <div
+      className="relative w-14 h-14 flex items-center justify-center"
+      style={talking ? { animation: "guideTalk 0.45s ease-in-out infinite alternate" } : undefined}
+    >
       {/* Outer glow ring */}
       <div
         className="absolute inset-0 rounded-full"
@@ -27,113 +35,26 @@ function BeraFace({ talking, thinking }: { talking: boolean; thinking: boolean }
           padding: "2px",
         }}
       />
-      <div className="absolute inset-[2px] rounded-full bg-[#0a0f1e]" />
-
-      {/* Face */}
-      <svg
-        viewBox="0 0 56 56"
-        className="relative z-10 w-12 h-12"
-        style={{ filter: "drop-shadow(0 0 6px rgba(0,212,255,0.5))" }}
-      >
-        {/* Face background */}
-        <circle cx="28" cy="28" r="24" fill="#0d1526" />
-        <circle cx="28" cy="28" r="23" fill="url(#faceGrad)" opacity="0.6" />
-
-        <defs>
-          <radialGradient id="faceGrad" cx="40%" cy="35%">
-            <stop offset="0%" stopColor="#1e3a5f" />
-            <stop offset="100%" stopColor="#060d1a" />
-          </radialGradient>
-          <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#00d4ff" />
-            <stop offset="100%" stopColor="#0070a8" />
-          </radialGradient>
-        </defs>
-
-        {/* Left eye */}
-        <ellipse
-          cx="20"
-          cy="24"
-          rx="4"
-          ry="4"
-          fill="url(#eyeGlow)"
-          style={{
-            animation: "blink 4s ease-in-out infinite",
-            filter: "drop-shadow(0 0 3px #00d4ff)",
-          }}
+      <div className="absolute inset-[2px] rounded-full overflow-hidden bg-[#0a0f1e]">
+        <video
+          src={GUIDE_VIDEO_SRC}
+          poster={GUIDE_POSTER_SRC}
+          autoPlay
+          loop
+          muted
+          playsInline
+          draggable={false}
+          className="h-full w-full object-cover"
         />
-        {/* Left pupil */}
-        <circle cx="20" cy="24" r="2" fill="#001f33" />
-        <circle cx="21" cy="23" r="0.8" fill="white" opacity="0.7" />
-
-        {/* Right eye */}
-        <ellipse
-          cx="36"
-          cy="24"
-          rx="4"
-          ry="4"
-          fill="url(#eyeGlow)"
-          style={{
-            animation: "blink 4s ease-in-out infinite 0.1s",
-            filter: "drop-shadow(0 0 3px #00d4ff)",
-          }}
-        />
-        {/* Right pupil */}
-        <circle cx="36" cy="24" r="2" fill="#001f33" />
-        <circle cx="37" cy="23" r="0.8" fill="white" opacity="0.7" />
-
-        {/* Mouth */}
-        {thinking ? (
-          /* Thinking dots */
-          <>
-            <circle cx="22" cy="36" r="1.8" fill="#00d4ff" style={{ animation: "pulse 0.8s ease-in-out infinite" }} />
-            <circle cx="28" cy="36" r="1.8" fill="#00d4ff" style={{ animation: "pulse 0.8s ease-in-out infinite 0.25s" }} />
-            <circle cx="34" cy="36" r="1.8" fill="#00d4ff" style={{ animation: "pulse 0.8s ease-in-out infinite 0.5s" }} />
-          </>
-        ) : talking ? (
-          /* Talking mouth — animated rectangle height */
-          <rect
-            x="20"
-            y="33"
-            width="16"
-            height="5"
-            rx="2.5"
-            fill="#00d4ff"
-            opacity="0.9"
-            style={{ animation: "talk 0.35s ease-in-out infinite alternate" }}
-          />
-        ) : (
-          /* Smile */
-          <path
-            d="M 20 34 Q 28 40 36 34"
-            stroke="#00d4ff"
-            strokeWidth="2.2"
-            fill="none"
-            strokeLinecap="round"
-          />
-        )}
-
-        {/* Antenna */}
-        <line x1="28" y1="4" x2="28" y2="10" stroke="#00d4ff" strokeWidth="1.5" opacity="0.7" />
-        <circle cx="28" cy="3.5" r="2" fill="#00d4ff" style={{ animation: "pulse 2s ease-in-out infinite" }} />
-
-        {/* Cheek blushes */}
-        <circle cx="12" cy="30" r="3.5" fill="#ff6b9d" opacity="0.25" />
-        <circle cx="44" cy="30" r="3.5" fill="#ff6b9d" opacity="0.25" />
-      </svg>
-
+      </div>
       <style>{`
-        @keyframes blink {
-          0%, 90%, 100% { ry: 4; }
-          95% { ry: 0.5; }
-        }
-        @keyframes talk {
-          from { height: 3px; y: 35px; }
-          to   { height: 7px; y: 33px; }
-        }
         @keyframes spin {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
+        }
+        @keyframes guideTalk {
+          from { transform: scale(1); }
+          to   { transform: scale(1.06); }
         }
         @keyframes pulse {
           0%, 100% { opacity: 0.4; transform: scale(0.85); }
@@ -266,9 +187,7 @@ export function BeraGuide() {
         >
           {/* Header */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border/30 bg-gradient-to-r from-primary/10 to-secondary/10">
-            <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-              <span className="text-primary text-sm font-bold">B</span>
-            </div>
+            <img src={GUIDE_POSTER_SRC} alt="Bera Guide" className="w-8 h-8 rounded-full object-cover border border-primary/40" />
             <div className="flex-1">
               <p className="text-sm font-bold text-primary font-mono">BERA GUIDE</p>
               <p className="text-[10px] text-muted-foreground font-mono">
