@@ -5,6 +5,7 @@ import { requireAny } from "../middlewares/requireAuth";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
 import { decryptGithubToken } from "../lib/github";
 import { runAgentBuild, runAgentEdit } from "../lib/agentBuild";
+import { assertPublicUrl } from "../lib/agentExplore";
 import { startWebDeployment } from "../lib/webProcess";
 import { logger } from "../lib/logger";
 
@@ -43,6 +44,7 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     buildLog: build.buildLog ?? null,
     parentId: build.parentId ?? null,
     builtinDb: Boolean(build.builtinDb),
+    apiUrl: (build as any).apiUrl ?? null,
     repoUrl: build.repoUrl,
     repoFullName: build.repoFullName,
     webDeploymentId: build.webDeploymentId,
@@ -114,9 +116,14 @@ router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise
   }
   const builtinDb = req.body?.useBuiltinDb === true;
   if (builtinDb && envVars.DATABASE_URL) { res.status(400).json({ error: "Choose either a built-in database or your own DATABASE_URL, not both." }); return; }
+  let apiUrl: string | null = null;
+  if (req.body?.apiUrl !== undefined && String(req.body.apiUrl).trim() !== "") {
+    try { apiUrl = (await assertPublicUrl(String(req.body.apiUrl))).toString(); }
+    catch (e: any) { res.status(400).json({ error: e?.message || "That API URL cannot be used." }); return; }
+  }
 
   const name = prompt.replace(/\s+/g, " ").slice(0, 60);
-  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars, builtinDb }).returning();
+  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars, builtinDb, apiUrl } as any).returning();
   runAgentBuild(build.id).catch((err) => logger.error({ err, buildId: build.id }, "Agent Bera build crashed"));
   res.status(202).json(serialize(build, null));
 });
@@ -148,6 +155,7 @@ router.post("/agent-bera/builds/:id/edit", requireAny("write"), async (req, res)
     plan: root.plan as any,
     envVars: root.envVars as any,
     builtinDb: root.builtinDb,
+    apiUrl: (root as any).apiUrl ?? null,
     repoUrl: root.repoUrl,
     repoFullName: root.repoFullName,
     webDeploymentId: root.webDeploymentId
@@ -174,6 +182,7 @@ router.patch("/agent-bera/builds/:id/env", requireAny("write"), async (req, res)
   const next: Record<string, string> = { ...checked.envVars };
   const current = root.envVars && typeof root.envVars === "object" ? root.envVars as Record<string, string> : {};
   if (root.builtinDb && current.DATABASE_URL && !next.DATABASE_URL) next.DATABASE_URL = current.DATABASE_URL;
+  if ((root as any).apiUrl) next.EXTERNAL_API_URL = String((root as any).apiUrl);
   await db.update(agentBuildsTable).set({ envVars: next, updatedAt: new Date() }).where(eq(agentBuildsTable.id, root.id));
   await db.update(webDeploymentsTable).set({ envVars: next, status: "queued", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, root.webDeploymentId));
   startWebDeployment(root.webDeploymentId).catch((err) => logger.error({ err, webDeploymentId: root.webDeploymentId }, "Agent Bera env-change restart failed"));

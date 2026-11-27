@@ -3,11 +3,12 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, desc, isNull, ne, and } from "drizzle-orm";
 import { createGithubRepository, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
 import { planProject, generateProjectFiles, repairBackendServer, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
+import { exploreExternalApi, type ExploredApi } from "./agentExplore";
 import { generateSlug, startWebDeployment } from "./webProcess";
 import { logger } from "./logger";
 
@@ -146,11 +147,34 @@ export async function runAgentBuild(buildId: number): Promise<void> {
         await note("Built-in database provisioned (isolated Postgres schema for this app)");
       }
     }
+    // Memory: the user's earlier apps, so a request like "like my
+    // coffee app, but for a salon" plans against what they already have.
+    let history: string | undefined;
+    try {
+      const past = await db.select({ prompt: agentBuildsTable.prompt, plan: agentBuildsTable.plan, status: agentBuildsTable.status })
+        .from(agentBuildsTable)
+        .where(and(eq(agentBuildsTable.userId, build.userId), isNull(agentBuildsTable.parentId), ne(agentBuildsTable.id, buildId)))
+        .orderBy(desc(agentBuildsTable.id)).limit(8);
+      const lines = past.filter(b => b.plan).map(b => {
+        const pl = b.plan as AgentProjectPlan;
+        return `- "${pl.appName}" (${b.status}): ${pl.summary} Resources: ${pl.resources.map(r => r.name).join(", ") || pl.resource}.`;
+      });
+      if (lines.length) history = lines.join("\n");
+    } catch { /* memory is an aid, never a blocker */ }
+
+    // External API: explore what the user pointed at BEFORE planning,
+    // so the plan and the code are built against what it really returns.
+    let explored: ExploredApi | undefined;
+    if ((build as any).apiUrl) {
+      explored = await exploreExternalApi(String((build as any).apiUrl));
+      envVars.EXTERNAL_API_URL = String((build as any).apiUrl);
+      await note(`Explored the external API at ${explored.url} — HTTP ${explored.status}, ${explored.contentType || "unknown type"}, learned from ${explored.probed.length} URL(s)`);
+    }
     const envKeys = Object.keys(envVars);
 
     // 1. Plan
     await setBuild(buildId, { status: "planning" });
-    const plan: AgentProjectPlan = await planProject(build.prompt, envKeys);
+    const plan: AgentProjectPlan = await planProject(build.prompt, envKeys, { history, externalApi: explored ? { url: explored.url, excerpt: explored.excerpt } : undefined });
     await setBuild(buildId, { plan, name: plan.appName || build.name });
     await note(`Plan: ${plan.appName} — ${plan.resources.length} resource(s), ${plan.endpoints.length} API endpoints (${plan.endpoints.map(e => `${e.method} ${e.path}`).join(", ")})`);
     if (envKeys.length) await note(`Environment variables provided: ${envKeys.join(", ")}`);
@@ -270,6 +294,7 @@ export async function runAgentEdit(buildId: number): Promise<void> {
     const plan = (build.plan || parent.plan) as AgentProjectPlan | null;
     if (!plan) throw new Error("The original build has no plan to test the edit against.");
     const envVars = envOf(build);
+    if ((build as any).apiUrl) envVars.EXTERNAL_API_URL = String((build as any).apiUrl);
     const envKeys = Object.keys(envVars);
 
     await note(`Edit requested for ${parent.name || parent.repoFullName}: ${build.prompt}`);

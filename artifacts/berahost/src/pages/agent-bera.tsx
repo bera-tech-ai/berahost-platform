@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import GithubTokenConnect from "@/components/github-token-connect";
 
@@ -132,6 +133,7 @@ export default function AgentBeraPage() {
   const { toast } = useToast();
   const [builds, setBuilds] = useState<AgentBuild[]>([]);
   const [prompt, setPrompt] = useState("");
+  const [apiUrl, setApiUrl] = useState("");
   const [envText, setEnvText] = useState("");
   const [useBuiltinDb, setUseBuiltinDb] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -176,7 +178,7 @@ export default function AgentBeraPage() {
     }
     setBusy(true);
     try {
-      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim(), ...(Object.keys(envVars).length ? { envVars } : {}), ...(useBuiltinDb ? { useBuiltinDb: true } : {}) }) });
+      await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim(), ...(Object.keys(envVars).length ? { envVars } : {}), ...(useBuiltinDb ? { useBuiltinDb: true } : {}), ...(apiUrl.trim() ? { apiUrl: apiUrl.trim() } : {}) }) });
       setPrompt("");
       setEnvText("");
       setUseBuiltinDb(false);
@@ -249,6 +251,11 @@ export default function AgentBeraPage() {
               <input type="checkbox" checked={useBuiltinDb} onChange={(e) => setUseBuiltinDb(e.target.checked)} disabled={githubConnected === false} className="mt-0.5" />
               <span>Give my app a <span className="font-medium">built-in database</span> <span className="text-muted-foreground">— BERAHOST provisions an isolated Postgres database for the app, so its data survives restarts. No DATABASE_URL needed.</span></span>
             </label>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">External API <span className="font-normal text-muted-foreground">(optional)</span></label>
+              <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.example.com — an API or its docs page" disabled={githubConnected === false} className="font-mono text-xs" />
+              <p className="text-xs text-muted-foreground">Building against an existing API? Paste its base URL or documentation page — the agent visits it first, learns what it returns, and codes against the real thing.</p>
+            </div>
             <div className="flex items-center gap-3">
               <Button type="submit" disabled={busy || githubConnected === false}>
                 {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
@@ -273,6 +280,7 @@ export default function AgentBeraPage() {
                   <Badge variant="outline" className={statusTone(b.status)}>{b.status.toUpperCase()}</Badge>
                   {b.parentId ? <Badge variant="outline">EDIT</Badge> : null}
                   {b.builtinDb ? <Badge variant="outline">BUILT-IN DB</Badge> : null}
+                  {(b as any).apiUrl ? <Badge variant="outline">API</Badge> : null}
                   {b.status !== "live" && b.status !== "failed" && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
                 </div>
                 <p className="text-sm text-muted-foreground">{b.prompt}</p>

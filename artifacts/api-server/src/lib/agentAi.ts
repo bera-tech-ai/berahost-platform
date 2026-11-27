@@ -144,6 +144,11 @@ export type AgentProjectPlan = {
   resource: string;
   resources: AgentResourcePlan[];
   endpoints: AgentEndpointTest[];
+  // Context the platform gathered before planning: the user's earlier
+  // builds (memory) and, when the user supplied one, the explored
+  // contract of an external API this app should be built against.
+  historyNote?: string;
+  externalApi?: { url: string; excerpt: string };
 };
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -202,13 +207,22 @@ function extractJsonObject(text: string): any | null {
   try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
 }
 
-export async function planProject(promptText: string, envKeys: string[] = []): Promise<AgentProjectPlan> {
+export async function planProject(promptText: string, envKeys: string[] = [], context?: { history?: string; externalApi?: { url: string; excerpt: string } }): Promise<AgentProjectPlan> {
+  const plan = await planProjectInner(promptText, envKeys, context);
+  if (context?.externalApi) plan.externalApi = context.externalApi;
+  if (context?.history) plan.historyNote = context.history;
+  return plan;
+}
+
+async function planProjectInner(promptText: string, envKeys: string[] = [], context?: { history?: string; externalApi?: { url: string; excerpt: string } }): Promise<AgentProjectPlan> {
   try {
     const raw = await agentChat(
       "System: You are Agent Bera's project planner. Reply with ONLY a JSON object, no markdown, no commentary.\n" +
       "Shape: {\"appName\": string, \"summary\": string, \"resources\": [{\"name\": string (one lowercase plural word for a data collection, e.g. products), \"endpoints\": [{\"name\": string, \"method\": \"GET|POST|PUT|PATCH|DELETE\", \"path\": \"/api/...\", \"body\": object (POST/PUT only, realistic sample data), \"expected\": [status codes]}]}]}\n" +
       "Rules: plan 1-3 resources — use MORE THAN ONE when the app naturally has several kinds of data (e.g. a gym has members AND payments AND checkins; a school has students AND fees). Each resource gets a list endpoint, a create endpoint with a realistic sample body, and a get-one endpoint using a concrete id like /api/products/1 (the app seeds data, so id 1 must exist). Add update/delete endpoints where they are natural. Keep the TOTAL across all resources to at most 10 endpoints. Paths must be concrete — no :params or placeholders.\n" +
       (envKeys.length ? `\nThe app will run with these environment variables available (names only): ${envKeys.join(", ")}. Plan the data layer around them (e.g. DATABASE_URL means a real Postgres database).\n` : "") +
+      (context?.history ? `\nThis user has built these apps before:\n${context.history}\nIf the new request refers to one of them ("like my coffee app", "similar to the gym one"), mirror that app's resources and structure, adapted to the new request.\n` : "") +
+      (context?.externalApi ? `\nThe user wants this app built against an EXTERNAL API at ${context.externalApi.url} (available to the backend as the EXTERNAL_API_URL environment variable). The platform fetched that URL before planning; here is what it returned:\n---\n${context.externalApi.excerpt}\n---\nPlan this app's OWN /api endpoints so the backend can proxy and shape that external data for the frontend (the frontend only ever calls this app's own endpoints). Keep the same endpoint discipline: list, create where natural, get-one with a concrete id — for proxied data, get-one may map to the external API's own id.\n` : "") +
       "\nUser: Plan a full-stack web app for this request: " + promptText,
       90000);
     const parsed = extractJsonObject(raw);
@@ -478,7 +492,7 @@ function endpointListText(plan: AgentProjectPlan, withBodies: boolean): string {
 export async function generateBackendServer(promptText: string, plan: AgentProjectPlan, envKeys: string[] = []): Promise<string> {
   const endpointList = endpointListText(plan, true);
   let code = await stitchCode(
-    "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + "\n\nEndpoints to implement:\n" + endpointList,
+    "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? `\n\nEXTERNAL API: this app integrates with ${plan.externalApi.url}, available as process.env.EXTERNAL_API_URL. Call it SERVER-SIDE with fetch (e.g. to list or fetch the external data behind this app's own endpoints), shaping the response for the frontend. What that URL returned when the platform explored it:\n---\n${plan.externalApi.excerpt}\n---\nIf an external call fails at runtime, answer 502 with a JSON error — never crash. Data the user creates in THIS app still goes through the provided store.` : "") + "\n\nEndpoints to implement:\n" + endpointList,
     "server.js",
     (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
   code = stripProseAroundCode(normalizeServerCode(code));
@@ -539,7 +553,7 @@ const FRONTEND_RULES = [
 export async function generateFrontend(promptText: string, plan: AgentProjectPlan): Promise<string> {
   const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
   const attempt = () => stitchCode(
-    "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + "\n\nBackend API endpoints available:\n" + endpointList,
+    "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? "\n\nNote: some data comes from an external API, but it ALWAYS reaches this page through the app's own backend endpoints listed below — never call the external API from the browser." : "") + "\n\nBackend API endpoints available:\n" + endpointList,
     "HTML",
     (c) => looksComplete(c),
     8);

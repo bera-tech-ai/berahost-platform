@@ -28,6 +28,10 @@ export const agentBuildsTable = pgTable("agent_builds", {
   // True when the user asked for a platform-provisioned database; its
   // DATABASE_URL is generated server-side and stored in envVars.
   builtinDb: boolean("builtin_db").default(false).notNull(),
+  // Optional external API the user wants the app built against. The
+  // platform explores it before planning (see agentExplore.ts) and the
+  // generated backend reaches it via the EXTERNAL_API_URL env var.
+  apiUrl: text("api_url"),
   repoUrl: text("repo_url"),
   repoFullName: varchar("repo_full_name", { length: 255 }),
   webDeploymentId: integer("web_deployment_id"),
