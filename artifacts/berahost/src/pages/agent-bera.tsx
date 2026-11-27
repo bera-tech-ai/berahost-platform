@@ -22,7 +22,7 @@ type AgentBuild = {
   builtinDb?: boolean;
   envVarKeys?: string[];
   testResults?: { ok: boolean; results: CheckResult[] } | null;
-  liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string; screenshot?: string } } | null;
+  liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string; screenshot?: string; flow?: { attempted: boolean; ok: boolean; detail: string }; vision?: { ok: boolean | null; issues: string[]; detail: string } } } | null;
   repoUrl?: string | null;
   publicUrl?: string | null;
   deploymentStatus?: string | null;
@@ -318,6 +318,8 @@ export default function AgentBeraPage() {
                     <img src={b.liveCheck.browser.screenshot} alt="Screenshot of the live app taken by Agent Bera's browser check" className="w-full rounded-md border border-border" />
                   </a>
                 )}
+                {b.liveCheck?.browser?.flow?.attempted && <p className={`mt-1 text-xs ${b.liveCheck.browser.flow.ok ? "text-muted-foreground" : "text-red-300"}`}>🖱️ Interaction: {b.liveCheck.browser.flow.detail}</p>}
+                {b.liveCheck?.browser?.vision && b.liveCheck.browser.vision.ok !== null && <p className={`mt-1 text-xs ${b.liveCheck.browser.vision.ok ? "text-muted-foreground" : "text-red-300"}`}>👁️ {b.liveCheck.browser.vision.detail}</p>}
                 <div className="flex flex-wrap gap-4 text-sm">
                   {b.publicUrl && b.status === "live" && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.publicUrl} target="_blank" rel="noreferrer">Visit live site <ExternalLink className="h-3.5 w-3.5" /></a>}
                   {b.repoUrl && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.repoUrl} target="_blank" rel="noreferrer"><Github className="h-3.5 w-3.5" /> View code</a>}

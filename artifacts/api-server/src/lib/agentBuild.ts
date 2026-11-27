@@ -55,6 +55,8 @@ async function restartDeployment(deploymentId: number): Promise<void> {
 function liveFailureText(live: LiveCheckReport): string {
   const parts = live.checks.filter(c => !c.ok).map(c => `${c.name}: ${c.detail}`);
   if (live.browser.consoleErrors?.length) parts.push(`Browser console errors: ${live.browser.consoleErrors.join(" | ")}`);
+  if (live.browser.flow && !live.browser.flow.ok) parts.push(`Browser interaction: ${live.browser.flow.detail}`);
+  if (live.browser.vision && live.browser.vision.ok === false) parts.push(`Vision check: ${live.browser.vision.issues.join("; ") || live.browser.vision.detail}`);
   return parts.join("\n") || "The live check failed without a specific failing check.";
 }
 

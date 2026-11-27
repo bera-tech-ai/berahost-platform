@@ -27,7 +27,11 @@ export type LiveCheckReport = {
   status?: number;
   title?: string;
   checks: CheckResult[];
-  browser: { available: boolean; ok?: boolean; detail: string; consoleErrors?: string[]; screenshot?: string };
+  browser: {
+    available: boolean; ok?: boolean; detail: string; consoleErrors?: string[]; screenshot?: string;
+    flow?: { attempted: boolean; ok: boolean; detail: string };
+    vision?: { ok: boolean | null; issues: string[]; detail: string };
+  };
   checkedAt: string;
 };
 
@@ -203,7 +207,35 @@ async function fetchCheck(name: string, url: string, expectStatuses: number[]): 
   }
 }
 
-async function browserTier(url: string): Promise<LiveCheckReport["browser"]> {
+// Vision pass on the screenshot — the same Qwen endpoint Bera AI uses
+// for image understanding (verified contract: {imageBase64, query} ->
+// {data:{reply}}). Judges only CLEAR breakage; any failure of the vision
+// service itself returns ok:null and never blocks a build.
+async function visionCheck(jpegDataUri: string): Promise<{ ok: boolean | null; issues: string[]; detail: string }> {
+  try {
+    const r = await fetch("https://apiz.xcasper.space/api/ai/qwen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageBase64: jpegDataUri,
+        query: "This is a screenshot of a newly deployed web app. Is the page VISIBLY broken? Reply with ONLY a JSON object: {\"ok\": boolean, \"issues\": [short strings]}. ok=false ONLY for clear breakage: an error message or stack trace shown on the page, a blank or missing content area, placeholder/lorem ipsum text, raw JSON or code dumped as the page, or overlapping unreadable layout. Simple or plain styling is FINE — ok=true."
+      }),
+      signal: AbortSignal.timeout(45000)
+    });
+    const data: any = await r.json().catch(() => null);
+    const reply = String(data?.data?.reply || "");
+    const m = reply.match(/\{[\s\S]*\}/);
+    if (!m) return { ok: null, issues: [], detail: "Vision check replied without a verdict — treated as unavailable" };
+    const parsed = JSON.parse(m[0]);
+    const issues = Array.isArray(parsed.issues) ? parsed.issues.map((i: any) => String(i)).slice(0, 5) : [];
+    const ok = parsed.ok === false ? false : true;
+    return { ok, issues, detail: ok ? "Vision check: the page looks intact" : `Vision check: the page looks broken — ${issues.join("; ") || "unspecified"}` };
+  } catch {
+    return { ok: null, issues: [], detail: "Vision check unavailable (the vision service did not answer)" };
+  }
+}
+
+async function browserTier(url: string, tests: AgentEndpointTest[] = []): Promise<LiveCheckReport["browser"]> {
   const dynamicImport = (spec: string) => (Function("s", "return import(s)") as any)(spec);
   // Shared page run for any puppeteer/playwright-shaped browser: load the
   // page, collect JS errors, measure the rendered text (a page that loads
@@ -217,20 +249,88 @@ async function browserTier(url: string): Promise<LiveCheckReport["browser"]> {
       page.on("console", (msg: any) => { if (msg.type() === "error") errors.push(msg.text()); });
       try { await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 }); }
       catch { await page.goto(url, { timeout: 30000 }); }
+
+      // --- Interaction flow: behave like a user. If the page has a form
+      // and the plan has a create sample, fill the form with the sample
+      // values, submit it, and require the sample's marker text to show
+      // up in the page afterwards (and no new JS errors while doing it).
+      const sample = tests.find(t => ["POST", "PUT", "PATCH"].includes(t.method) && t.body && Object.keys(t.body).length > 0);
+      const marker = sample ? (Object.values(sample.body as Record<string, unknown>).filter(v => typeof v === "string") as string[]).sort((a, b) => b.length - a.length)[0] : undefined;
+      let flow: LiveCheckReport["browser"]["flow"];
+      if (!sample) {
+        flow = { attempted: false, ok: true, detail: "No create action in the plan — no interaction to test" };
+      } else {
+        const filled: any = await page.evaluate((sampleBody: any) => {
+          const form = document.querySelector("form");
+          if (!form) return { hasForm: false, filled: 0 };
+          const keys = Object.keys(sampleBody || {});
+          let n = 0;
+          form.querySelectorAll("input, select, textarea").forEach((el: any) => {
+            const type = String(el.getAttribute("type") || "text").toLowerCase();
+            if (["submit", "button", "hidden", "file", "checkbox", "radio", "reset"].includes(type) || el.disabled) return;
+            const hint = `${el.getAttribute("name") || ""} ${el.id || ""} ${el.getAttribute("placeholder") || ""}`.toLowerCase();
+            let v: any;
+            for (const k of keys) { if (hint.includes(k.toLowerCase())) { v = sampleBody[k]; break; } }
+            if (v === undefined) {
+              if (type === "number" || type === "range") v = 42;
+              else if (type === "email") v = "test@example.com";
+              else if (type === "tel") v = "0700000000";
+              else if (type === "date") v = new Date().toISOString().slice(0, 10);
+              else v = "Test entry";
+            }
+            if (el.tagName === "SELECT") {
+              const opt = [...el.options].find((o: any) => String(o.value) === String(v)) || el.options[1] || el.options[0];
+              if (!opt) return;
+              el.value = opt.value;
+            } else { el.value = String(v); }
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            n++;
+          });
+          return { hasForm: true, filled: n };
+        }, sample.body).catch(() => ({ hasForm: false, filled: 0 }));
+        if (!filled.hasForm) {
+          flow = { attempted: false, ok: true, detail: "The page has no form — no interaction to test" };
+        } else {
+          const errorsBefore = errors.length;
+          await page.evaluate(() => {
+            const form = document.querySelector("form") as any;
+            if (!form) return;
+            const btn = form.querySelector('[type="submit"], button');
+            if (btn) btn.click(); else if (form.requestSubmit) form.requestSubmit(); else form.submit();
+          }).catch(() => {});
+          if (page.waitForNetworkIdle) await page.waitForNetworkIdle({ timeout: 6000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 1500));
+          const afterText: string = await page.evaluate(() => (document.body?.innerText || "")).catch(() => "");
+          const newErrors = errors.slice(errorsBefore);
+          const markerSeen = marker ? afterText.includes(marker) : afterText.trim().length > 0;
+          if (newErrors.length) flow = { attempted: true, ok: false, detail: `Submitting the form produced JS error(s): ${newErrors[0]}` };
+          else if (!markerSeen) flow = { attempted: true, ok: false, detail: `Submitted the form (${filled.filled} field(s) filled with the plan's sample data) but the new entry ("${marker}") never appeared on the page — the create flow looks broken` };
+          else flow = { attempted: true, ok: true, detail: `Filled and submitted the form like a user; the new entry ("${marker}") appeared on the page` };
+        }
+      }
+
       const text: string = await page.evaluate(() => (document.body?.innerText || "").trim()).catch(() => "");
       let screenshot: string | undefined;
+      let vision: LiveCheckReport["browser"]["vision"];
       try {
         const shot = await page.screenshot({ type: "png" });
         screenshot = "data:image/png;base64," + Buffer.from(shot as any).toString("base64");
       } catch { /* screenshot is a bonus; the checks above still count */ }
+      try {
+        const jpeg = await page.screenshot({ type: "jpeg", quality: 70 });
+        vision = await visionCheck("data:image/jpeg;base64," + Buffer.from(jpeg as any).toString("base64"));
+      } catch { vision = { ok: null, issues: [], detail: "Vision check unavailable (screenshot failed)" }; }
+
       const blank = text.length < 20;
-      const ok = errors.length === 0 && !blank;
-      const detail = blank
-        ? "Page loaded in a real browser but rendered almost no content (blank page)"
-        : errors.length === 0
-          ? "Page loaded in a real browser with no JS errors and visible content"
-          : `Page loaded with ${errors.length} JS error(s)`;
-      return { available: true, ok, detail, consoleErrors: errors.slice(0, 5), screenshot };
+      const ok = errors.length === 0 && !blank && flow.ok && vision.ok !== false;
+      const bits: string[] = [];
+      bits.push(blank ? "Page loaded in a real browser but rendered almost no content (blank page)"
+        : errors.length === 0 ? "Page loaded in a real browser with no JS errors and visible content"
+        : `Page loaded with ${errors.length} JS error(s)`);
+      if (flow.attempted) bits.push(flow.detail);
+      if (vision.ok === false) bits.push(vision.detail);
+      return { available: true, ok, detail: bits.join(" — "), consoleErrors: errors.slice(0, 5), screenshot, flow, vision };
     } finally { await browser.close().catch(() => {}); }
   };
   // 1. The Chromium bundled WITH the platform (@sparticuz/chromium +
@@ -275,7 +375,7 @@ export async function runLiveCheck(publicUrl: string, tests: AgentEndpointTest[]
   checks.push((await fetchCheck("Live API health", `${base}/api/health`, [200])).result);
   const sample = tests.find(t => t.method === "GET" && t.path.startsWith("/api/") && t.path !== "/api/health");
   if (sample) checks.push((await fetchCheck(`Live API endpoint ${sample.path}`, base + sample.path, sample.expected?.length ? sample.expected : [200])).result);
-  const browser = await browserTier(publicUrl);
+  const browser = await browserTier(publicUrl, tests);
   if (browser.available) {
     checks.push({ name: "Browser render check", ok: Boolean(browser.ok), detail: browser.detail + (browser.consoleErrors?.length ? ` — ${browser.consoleErrors.join(" | ")}` : "") });
   }
