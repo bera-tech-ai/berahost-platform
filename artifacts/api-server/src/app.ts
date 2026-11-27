@@ -43,7 +43,15 @@ app.use(express.json({
     (req as any).rawBody = Buffer.from(buffer);
   },
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({
+  extended: true,
+  // Capture the exact bytes like the JSON parser above does: the web
+  // deployment proxy forwards rawBody to the deployment's own server, and
+  // re-serializing a parsed body corrupts the request (see webProcess.ts).
+  verify: (req, _res, buffer) => {
+    (req as any).rawBody = Buffer.from(buffer);
+  },
+}));
 app.use(createSessionMiddleware());
 
 app.use("/api", router);

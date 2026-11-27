@@ -289,9 +289,40 @@ export async function handleWebRequest(req: any, res: any, next: any): Promise<v
   }
   if (!deployment.runtimePort) return res.status(503).send("Web runtime is not ready.");
   try {
-    const target = `http://127.0.0.1:${deployment.runtimePort}/${assetPath}`;
-    const body = ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body || {});
-    const response = await fetch(target, { method: req.method, headers: { ...req.headers, host: `127.0.0.1:${deployment.runtimePort}` } as any, body });
+    // Preserve the query string — it was previously dropped, breaking any
+    // deployed app that reads query params (search, callbacks, pagination).
+    const query = req.url && req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+    const target = `http://127.0.0.1:${deployment.runtimePort}/${assetPath}${query}`;
+    // Forward the request body EXACTLY as the client sent it. The previous
+    // code sent JSON.stringify(req.body) while also forwarding the original
+    // Content-Length header: the re-serialized body almost never has the
+    // same byte length, so the deployment's server waited for bytes that
+    // would never arrive (or read a truncated body) and every form/API POST
+    // hung until the outer proxy timed out. GETs were unaffected, which is
+    // why deployed sites loaded but no form submission ever completed.
+    let body: Buffer | undefined;
+    if (!["GET", "HEAD"].includes(req.method)) {
+      if ((req as any).rawBody) {
+        // Captured byte-for-byte by the body parsers' verify hooks (app.ts).
+        body = (req as any).rawBody;
+      } else if (req.body && typeof req.body === "object" && Object.keys(req.body).length > 0) {
+        // A parser consumed the stream without leaving raw bytes behind.
+        // Re-serializing is lossy; it is only a last resort so the request
+        // can still complete instead of hanging.
+        body = Buffer.from(JSON.stringify(req.body));
+      } else {
+        // No parser touched this request (e.g. multipart uploads, plain
+        // text, octet-stream): the raw stream is still intact — read it.
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any));
+        if (chunks.length) body = Buffer.concat(chunks);
+      }
+    }
+    const headers = { ...req.headers, host: `127.0.0.1:${deployment.runtimePort}` };
+    // Never forward the original Content-Length: fetch computes it from the
+    // body actually sent. A stale length is what made targets hang.
+    delete headers["content-length"];
+    const response = await fetch(target, { method: req.method, headers: headers as any, body });
     res.status(response.status);
     response.headers.forEach((value, key) => { if (key.toLowerCase() !== "transfer-encoding") res.setHeader(key, value); });
     res.send(Buffer.from(await response.arrayBuffer()));
