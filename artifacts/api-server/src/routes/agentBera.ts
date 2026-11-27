@@ -31,8 +31,12 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     id: build.id,
     prompt: build.prompt,
     name: build.name,
-    status: live && build.status === "deploying" ? "live" : build.status,
+    status: live && ["deploying", "verifying"].includes(build.status) ? "live" : build.status,
     error: build.error,
+    plan: build.plan ?? null,
+    testResults: build.testResults ?? null,
+    liveCheck: build.liveCheck ?? null,
+    buildLog: build.buildLog ?? null,
     repoUrl: build.repoUrl,
     repoFullName: build.repoFullName,
     webDeploymentId: build.webDeploymentId,
@@ -71,14 +75,14 @@ router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise
   // within the plan's web-app allowance — a build becomes a deployment.
   const existing = await db.select({ id: webDeploymentsTable.id }).from(webDeploymentsTable).where(eq(webDeploymentsTable.userId, user.id));
   const inFlight = await db.select({ id: agentBuildsTable.id }).from(agentBuildsTable)
-    .where(and(eq(agentBuildsTable.userId, user.id), inArray(agentBuildsTable.status, ["generating", "publishing", "deploying"])));
+    .where(and(eq(agentBuildsTable.userId, user.id), inArray(agentBuildsTable.status, ["planning", "generating", "testing", "publishing", "deploying", "verifying"])));
   if (existing.length + inFlight.length >= entitlement.plan.maxWebApps) {
     res.status(403).json({ error: `${entitlement.plan.name} supports up to ${entitlement.plan.maxWebApps} web apps.`, limit: entitlement.plan.maxWebApps });
     return;
   }
 
   const name = prompt.replace(/\s+/g, " ").slice(0, 60);
-  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "generating" }).returning();
+  const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning" }).returning();
   runAgentBuild(build.id).catch((err) => logger.error({ err, buildId: build.id }, "Agent Bera build crashed"));
   res.status(202).json(serialize(build, null));
 });

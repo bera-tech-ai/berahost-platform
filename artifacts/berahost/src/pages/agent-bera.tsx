@@ -9,19 +9,24 @@ import { useToast } from "@/hooks/use-toast";
 
 const BASE = import.meta.env.BASE_URL;
 
+type CheckResult = { name: string; ok: boolean; detail: string; status?: number };
 type AgentBuild = {
   id: number;
   prompt: string;
   name?: string | null;
   status: string;
   error?: string | null;
+  plan?: { appName?: string; summary?: string; endpoints?: Array<{ method: string; path: string }> } | null;
+  testResults?: { ok: boolean; results: CheckResult[] } | null;
+  liveCheck?: { ok: boolean; url: string; title?: string; checks: CheckResult[]; browser: { available: boolean; ok?: boolean; detail: string } } | null;
   repoUrl?: string | null;
   publicUrl?: string | null;
   deploymentStatus?: string | null;
   createdAt?: string | null;
 };
 
-const STAGES = ["generating", "publishing", "deploying", "live"] as const;
+const STAGES = ["planning", "generating", "testing", "publishing", "deploying", "verifying", "live"] as const;
+const STAGE_LABELS: Record<string, string> = { planning: "Plan", generating: "Build", testing: "Test APIs", publishing: "Publish", deploying: "Deploy", verifying: "Live check", live: "Live" };
 
 function statusTone(status: string) {
   if (status === "live") return "border-accent/30 bg-accent/10 text-accent";
@@ -31,9 +36,12 @@ function statusTone(status: string) {
 
 function stageLabel(status: string) {
   switch (status) {
-    case "generating": return "Designing & building your website…";
-    case "publishing": return "Publishing the code to your GitHub…";
+    case "planning": return "Planning the app and its API…";
+    case "generating": return "Writing the backend and frontend code…";
+    case "testing": return "Booting the app in a sandbox and testing every API endpoint…";
+    case "publishing": return "Publishing the tested code to your GitHub…";
     case "deploying": return "Deploying on BERAHOST…";
+    case "verifying": return "Checking the live deployment…";
     case "live": return "Live";
     case "failed": return "Failed";
     default: return status;
@@ -76,7 +84,7 @@ export default function AgentBeraPage() {
     try {
       await apiFetch("/api/agent-bera/builds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: prompt.trim() }) });
       setPrompt("");
-      toast({ title: "Agent Bera is on it", description: "Designing, building and publishing your site — watch the progress below." });
+      toast({ title: "Agent Bera is on it", description: "Planning, coding the backend, testing the APIs, then publishing — watch the progress below." });
       await load();
     } catch (err: any) {
       toast({ title: "Build could not start", description: err?.error || "Try again.", variant: "destructive" });
@@ -87,7 +95,7 @@ export default function AgentBeraPage() {
     <div className="space-y-6">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight"><WandSparkles className="h-6 w-6 text-primary" /> Agent Bera</h1>
-        <p className="text-muted-foreground mt-1">Describe the website you want in plain language. Agent Bera designs it, builds it, publishes the code to your GitHub, and deploys it here on BERAHOST — you get a live link.</p>
+        <p className="text-muted-foreground mt-1">Describe the app you want in plain language. Agent Bera plans it, writes the full-stack code (Node/Express backend + API-driven frontend), boots it in a sandbox and tests every API endpoint before anything is published, then deploys it here on BERAHOST and checks the live result.</p>
       </div>
 
       {githubConnected === false && (
@@ -107,7 +115,7 @@ export default function AgentBeraPage() {
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g. A website for my coffee shop Kahawa House in Nairobi — menu with prices in KES, photos, opening hours, and a contact section"
+              placeholder="e.g. An inventory app for my shop — products API with prices in KES, add/list products from the page, low-stock view"
               rows={4}
               maxLength={2000}
               disabled={githubConnected === false}
@@ -141,13 +149,28 @@ export default function AgentBeraPage() {
                   <div className="flex flex-wrap gap-1.5">
                     {STAGES.map((s, i) => (
                       <span key={s} className={`rounded-full border px-2 py-0.5 text-[11px] ${i < stageIdx || b.status === "live" ? "border-accent/30 bg-accent/10 text-accent" : i === stageIdx ? "border-primary/30 bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>
-                        {s === "generating" ? "Build" : s === "publishing" ? "Publish" : s === "deploying" ? "Deploy" : "Live"}
+                        {STAGE_LABELS[s]}
                       </span>
                     ))}
                     <span className="text-xs text-muted-foreground self-center">{stageLabel(b.status)}</span>
                   </div>
                 )}
                 {b.error && <p className="text-sm text-destructive">{b.error}</p>}
+                {b.plan?.endpoints && b.plan.endpoints.length > 0 && (
+                  <p className="text-xs text-muted-foreground">API: {b.plan.endpoints.map((e) => `${e.method} ${e.path}`).join(" · ")}</p>
+                )}
+                {b.testResults && (
+                  <p className="text-xs">
+                    <span className={b.testResults.ok ? "text-accent" : "text-destructive"}>Endpoint tests: {b.testResults.results.filter((r) => r.ok).length}/{b.testResults.results.length} passed</span>
+                    {!b.testResults.ok && b.testResults.results.filter((r) => !r.ok).slice(0, 3).map((r) => <span key={r.name} className="block text-destructive">{r.name} — {r.detail}</span>)}
+                  </p>
+                )}
+                {b.liveCheck && (
+                  <p className="text-xs">
+                    <span className={b.liveCheck.ok ? "text-accent" : "text-destructive"}>Live check: {b.liveCheck.ok ? "passed" : "problems found"}</span>
+                    <span className="text-muted-foreground"> · Browser: {b.liveCheck.browser.available ? (b.liveCheck.browser.ok ? "loaded clean" : "loaded with JS errors") : "not available on this host (HTTP + API checks still ran)"}</span>
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-4 text-sm">
                   {b.publicUrl && b.status === "live" && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.publicUrl} target="_blank" rel="noreferrer">Visit live site <ExternalLink className="h-3.5 w-3.5" /></a>}
                   {b.repoUrl && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.repoUrl} target="_blank" rel="noreferrer"><Github className="h-3.5 w-3.5" /> View code</a>}
