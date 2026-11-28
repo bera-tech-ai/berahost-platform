@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, isNull, ne, and } from "drizzle-orm";
-import { createGithubRepository, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
+import { createGithubRepositoryWithRetry, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
 import { planProject, generateProjectFiles, repairBackendServer, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
@@ -14,7 +14,7 @@ import { logger } from "./logger";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-gbyspbc3.manus.space";
 function publicUrlFor(slug: string) {
   const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;
@@ -182,7 +182,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     // 2. Generate the full-stack project
     await setBuild(buildId, { status: "generating" });
     const base = slugify(plan.appName || build.prompt.split(/\s+/).slice(0, 5).join(" "));
-    const files = await generateProjectFiles(build.prompt, plan, base, envKeys);
+    const files = await generateProjectFiles(build.prompt, plan, base, envKeys, note);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes
@@ -214,16 +214,18 @@ export async function runAgentBuild(buildId: number): Promise<void> {
       throw new Error(`The build failed its pre-publish endpoint tests (${failed}), so nothing was published. The failing checks are listed on the build.`);
     }
 
-    // 4. Publish to a fresh repo under the user's GitHub account
+    // 4. Publish to a fresh repo under the user's GitHub account. The
+    // helper logs every failed creation attempt to the build log with
+    // GitHub's real status + message and retries 422s (name taken) with
+    // -2 / -3 suffixed names; the error rethrown here always carries
+    // GitHub's detail, never a bare "Repository creation failed."
     await setBuild(buildId, { status: "publishing" });
-    let repo: Awaited<ReturnType<typeof createGithubRepository>> | null = null;
-    let lastError: any = null;
-    for (let attempt = 0; attempt < 3 && !repo; attempt++) {
-      const name = `${base}-${crypto.randomBytes(2).toString("hex")}`;
-      try { repo = await createGithubRepository(token, name, `Built with Agent Bera: ${build.prompt.slice(0, 100)}`); }
-      catch (e: any) { lastError = e; if (!/already exists|422/i.test(String(e?.message || e))) throw e; }
+    let repo: Awaited<ReturnType<typeof createGithubRepositoryWithRetry>>;
+    try {
+      repo = await createGithubRepositoryWithRetry(token, `${base}-${crypto.randomBytes(2).toString("hex")}`, `Built with Agent Bera: ${build.prompt.slice(0, 100)}`, note);
+    } catch (e: any) {
+      throw new Error(`GitHub repo creation failed: ${String(e?.message || e)}`);
     }
-    if (!repo) throw new Error(`GitHub repo creation failed: ${lastError?.message || "unknown error"}`);
     files["package.json"] = JSON.stringify({ ...JSON.parse(files["package.json"]), name: repo.name }, null, 2);
     for (const pathInRepo of Object.keys(files)) {
       await createRepositoryFile(token, repo.fullName, pathInRepo, files[pathInRepo], `Add ${pathInRepo} (built by Agent Bera)`);
