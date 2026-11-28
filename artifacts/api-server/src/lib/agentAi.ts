@@ -978,6 +978,24 @@ const FRONTEND_RULES = [
   "- The file MUST be complete: end with </body></html>."
 ].join("\n");
 
+// Deterministic frontend path normalisation (Fix L). The wiring gate
+// (agentTest) requires relative API paths — apps serve under a
+// /web/<slug> base path, so '/api/…' hits the platform's own API —
+// but the model keeps emitting the absolute dialect no matter how the
+// rules are worded: edit build 18's regenerated page WAS wired, yet
+// called '/api/health', '/api/logout', '/api/products' and failed the
+// gate twice through frontend repair. So the dialect is taken out of
+// the model's hands: every frontend this module returns is rewritten
+// mechanically. ONLY quote-delimited literals are touched — a '/api/'
+// immediately preceded by a single quote, double quote or backtick is
+// an API call target (fetch('/api/x'), fetch("/api/x"),
+// fetch(`/api/x/${id}`)); the same text in visible page copy is not
+// preceded by a quote and is left alone. Already-relative pages are a
+// byte-for-byte no-op.
+export function normalizeFrontendHtml(html: string): string {
+  return String(html || "").replace(/(['"`])\/api\//g, "$1api/");
+}
+
 export async function generateFrontend(promptText: string, plan: AgentProjectPlan, log?: (line: string) => void | Promise<void>): Promise<string> {
   const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
   const attempt = () => stitchCode(
@@ -1004,7 +1022,7 @@ export async function generateFrontend(promptText: string, plan: AgentProjectPla
     if (looksComplete(fresh) || fresh.length > html.length) html = fresh;
   }
   if (!looksComplete(html)) throw new Error("The generated frontend came back incomplete, so nothing was published. Please try again.");
-  return html;
+  return normalizeFrontendHtml(html);
 }
 
 // Repair a frontend that FAILED the wiring gate: the backend is real
@@ -1039,7 +1057,7 @@ export async function repairFrontend(promptText: string, plan: AgentProjectPlan,
     if (looksComplete(fresh) || fresh.length > html.length) html = fresh;
   }
   if (!looksComplete(html)) throw new Error("The repaired frontend was still incomplete.");
-  return html;
+  return normalizeFrontendHtml(html);
 }
 
 // An independent reviewer pass over the generated backend: a separate AI
@@ -1086,7 +1104,7 @@ export async function editProjectFiles(instruction: string, plan: AgentProjectPl
       "HTML",
       (c) => looksComplete(c),
       8);
-    if (looksComplete(html)) frontend = html;
+    if (looksComplete(html)) frontend = normalizeFrontendHtml(html);
   } catch { /* keep the current frontend */ }
   return { server, frontend };
 }

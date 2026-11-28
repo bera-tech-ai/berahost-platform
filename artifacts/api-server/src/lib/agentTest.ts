@@ -205,22 +205,45 @@ function requiredFrontendCalls(plan: AgentProjectPlan): RequiredCall[] {
 
 type ExtractedCall = { raw: string; absolute: boolean; segments: string[] };
 
+function toExtractedCall(raw: string): ExtractedCall | null {
+  const t = String(raw || "").trim();
+  if (!t) return null;
+  const absolute = t.startsWith("/api/") || t === "/api";
+  const cleaned = t.split(/[?#]/)[0].replace(/^\.\//, "").replace(/^\/+/, "");
+  if (cleaned.toLowerCase() !== "api" && !cleaned.toLowerCase().startsWith("api/")) return null;
+  // Template interpolations and :params stand for a concrete id.
+  const segments = cleaned.split("/").filter(s => s.length > 0)
+    .map(s => (s.includes("${") || s.startsWith(":") ? ":id" : s.toLowerCase()));
+  return { raw: t, absolute, segments };
+}
+
 function extractApiCalls(html: string): ExtractedCall[] {
   const calls: ExtractedCall[] = [];
-  const push = (raw: string) => {
-    const t = String(raw || "").trim();
-    if (!t) return;
-    const absolute = t.startsWith("/api/") || t === "/api";
-    const cleaned = t.split(/[?#]/)[0].replace(/^\.\//, "").replace(/^\/+/, "");
-    if (cleaned.toLowerCase() !== "api" && !cleaned.toLowerCase().startsWith("api/")) return;
-    // Template interpolations and :params stand for a concrete id.
-    const segments = cleaned.split("/").filter(s => s.length > 0)
-      .map(s => (s.includes("${") || s.startsWith(":") ? ":id" : s.toLowerCase()));
-    calls.push({ raw: t, absolute, segments });
-  };
+  const push = (raw: string) => { const c = toExtractedCall(raw); if (c) calls.push(c); };
   for (const m of html.matchAll(/fetch\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) push(m[2]);
   for (const m of html.matchAll(/\.open\(\s*(['"])[A-Za-z]+\1\s*,\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g)) push(m[3]);
   return calls;
+}
+
+// Fix L widening: pages also wire endpoints through variables —
+// const LOGIN_URL = 'api/login'; fetch(LOGIN_URL) — whose URLs never
+// reach fetch() as a first-argument literal and were invisible to the
+// scanner above (edit build 18 was flagged "page never calls POST
+// api/login" for exactly this shape). Collect every string literal
+// inside <script> blocks whose value is an api path and treat it as
+// evidence of a call, with the same normalisation as first-arg
+// targets. Literals in markup or body prose do NOT count — a page
+// that merely mentions api/login in text is still a brochure.
+function extractScriptApiLiterals(html: string): ExtractedCall[] {
+  const out: ExtractedCall[] = [];
+  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    for (const m of block[1].matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+      if (!/^\.?\/?api\/[a-z0-9]/i.test(m[2].trim())) continue;
+      const c = toExtractedCall(m[2]);
+      if (c) out.push(c);
+    }
+  }
+  return out;
 }
 
 // Segment-wise match: 'api/users' matches the list/create root,
@@ -240,15 +263,29 @@ export function frontendWiringCheck(files: Record<string, string>, plan: AgentPr
   const reqText = (r: RequiredCall) => `${r.method} ${r.path.slice(1)}`;
   if (!html) return { name, ok: false, detail: "the project has no public/index.html — there is no page to wire to the API" };
   const calls = extractApiCalls(html);
-  if (!calls.length) {
+  const literals = extractScriptApiLiterals(html);
+  const all = [...calls, ...literals];
+  if (!all.length) {
     return { name, ok: false, detail: `page makes no API calls — it is a static page, not an app; it never calls the endpoints the backend implements (required: ${required.map(reqText).join(", ") || "none"})` };
   }
+  // An endpoint counts as called only through a RELATIVE path, from
+  // either extraction set. Absolute forms stay faults: a first-arg
+  // absolute target is always named, and a required endpoint that
+  // appears only in absolute form (either set) is named through that
+  // literal rather than reported as never called.
   const problems: string[] = [];
+  const seenProblems = new Set<string>();
+  const addProblem = (p: string) => { if (!seenProblems.has(p)) { seenProblems.add(p); problems.push(p); } };
+  const absoluteProblem = (raw: string) => `absolute API path '${raw}' breaks under the app's base path; use relative '${raw.replace(/^\/+/, "")}'`;
   for (const c of calls) {
-    if (c.absolute) problems.push(`absolute API path '${c.raw}' breaks under the app's base path; use relative '${c.raw.slice(1)}'`);
+    if (c.absolute) addProblem(absoluteProblem(c.raw));
   }
   for (const r of required) {
-    if (!calls.some(c => callMatches(c.segments, r.path))) problems.push(`page never calls ${reqText(r)}`);
+    if (all.some(c => !c.absolute && callMatches(c.segments, r.path))) continue;
+    if (calls.some(c => c.absolute && callMatches(c.segments, r.path))) continue; // already named above
+    const lit = literals.find(c => c.absolute && callMatches(c.segments, r.path));
+    if (lit) { addProblem(absoluteProblem(lit.raw)); continue; }
+    addProblem(`page never calls ${reqText(r)}`);
   }
   if (problems.length) return { name, ok: false, detail: problems.join("; ") };
   return { name, ok: true, detail: `page calls every required endpoint with relative paths (${required.map(reqText).join(", ")})` };
