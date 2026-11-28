@@ -168,12 +168,48 @@ export async function listGithubBranches(accessToken: string, fullName: string):
 }
 
 export async function createGithubRepository(accessToken: string, name: string, description?: string): Promise<GithubRepository> {
-  const repo = await readGithubJson(await githubRequest("/user/repos", accessToken, {
+  const response = await githubRequest("/user/repos", accessToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, description: description || "Built with Agent Bera on BERAHOST", private: false, auto_init: false }),
-  }));
+  });
+  const repo: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // Surface the REAL failure. GitHub's top-level message alone is often
+    // generic (a 422 arrives as just "Repository creation failed.") — the
+    // actionable detail lives in the errors array, and the status decides
+    // whether a retry can help. Both ride on the thrown error: the status
+    // as a property, and "status + message + detail" as the message.
+    const detail = Array.isArray(repo?.errors) && repo.errors.length
+      ? ` (${repo.errors.map((e: any) => [e?.field, e?.message || e?.code].filter(Boolean).join(": ")).filter(Boolean).join("; ")})`
+      : "";
+    const message = typeof repo?.message === "string" && repo.message ? repo.message : `GitHub API request failed (${response.status})`;
+    const err: any = new Error(`${response.status} ${message}${detail}`);
+    err.status = response.status;
+    throw err;
+  }
   return { id: Number(repo.id), fullName: String(repo.full_name), name: String(repo.name), ownerLogin: String(repo.owner?.login || ""), private: Boolean(repo.private), htmlUrl: String(repo.html_url), defaultBranch: String(repo.default_branch || "main"), description: repo.description ? String(repo.description) : null, updatedAt: repo.updated_at ? String(repo.updated_at) : null };
+}
+
+// Create a repo for an Agent Bera publish, surviving the one failure a
+// retry can fix: a 422 (name already taken / unavailable) gets up to two
+// more attempts with -2 / -3 suffixes on the first name — three names
+// total. EVERY failed attempt is reported through `log` with GitHub's real
+// status + message, and the error that ultimately propagates carries them
+// too, so a publish never dies with a bare unexplained failure again.
+export async function createGithubRepositoryWithRetry(accessToken: string, firstName: string, description: string | undefined, log?: (line: string) => void | Promise<void>): Promise<GithubRepository> {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const name = attempt === 1 ? firstName : `${firstName}-${attempt}`;
+    try {
+      return await createGithubRepository(accessToken, name, description);
+    } catch (e: any) {
+      lastError = e;
+      if (log) await log(`GitHub repo creation attempt ${attempt} failed: ${String(e?.message || e)}`);
+      if (e?.status !== 422) break;
+    }
+  }
+  throw lastError ?? new Error("GitHub repo creation failed");
 }
 
 export async function createRepositoryFile(accessToken: string, fullName: string, pathInRepo: string, content: string, message: string): Promise<void> {

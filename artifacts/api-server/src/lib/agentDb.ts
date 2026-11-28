@@ -31,8 +31,20 @@ export async function provisionBuiltinDb(buildId: number): Promise<BuiltinDb | n
     const existing = await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
     if (existing.rowCount && existing.rowCount > 0) return null;
     await client.query(`CREATE ROLE "${role}" LOGIN PASSWORD '${password}'`);
+    // Postgres 16+ (Neon): CREATE SCHEMA ... AUTHORIZATION and
+    // ALTER ROLE ... SET both perform a SET ROLE permission check and fail
+    // with `must be able to SET ROLE "${role}"` unless the platform user
+    // holds the new role WITH SET. Grant it explicitly, immediately after
+    // creating the role — best-effort, because the role's creator may
+    // already hold what's needed and Neon may manage grants itself; a
+    // refusal here must not kill the build.
+    await client.query(`GRANT "${role}" TO CURRENT_USER WITH SET TRUE`).catch(() => {});
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${role}"`);
-    await client.query(`ALTER ROLE "${role}" SET search_path = "${schema}"`);
+    // Best-effort: even if this ALTER is refused, the default search_path
+    // ("$user") already resolves to the role's own schema (created above,
+    // owned by the role), so the app's tables still land in its isolated
+    // schema.
+    await client.query(`ALTER ROLE "${role}" SET search_path = "${schema}"`).catch(() => {});
     // Belt and braces: the role never gets anything on the platform schema.
     await client.query(`REVOKE ALL ON SCHEMA "${platformSchema}" FROM "${role}"`).catch(() => {});
   } finally {
