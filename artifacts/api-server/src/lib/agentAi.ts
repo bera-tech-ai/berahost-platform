@@ -380,7 +380,16 @@ const DEMAND_STOPWORDS = new Set(["fields", "field", "endpoints", "endpoint", "r
 // accepts a plan that names the resource by either end of the phrase
 // (see assessPlanCoverage).
 export function demandedApiRoots(promptText: string): string[] {
-  const text = String(promptText || "");
+  // External URLs are stripped before scanning: a prompt that tells the
+  // app to call an outside service ("fetch https://…/api/ai/gemini?…",
+  // BeraChat build 29) would otherwise demand a nonsense resource named
+  // after the external path's first segment ("ai"), and the planner
+  // would invent CRUD endpoints for it. The app's OWN endpoints are
+  // written as bare paths ("/api/users") with no scheme or host, so
+  // they survive the strip and are extracted exactly as before. The
+  // strip applies to the whole scan — the /api-root pass AND the
+  // enumerated-name pass below read the same text.
+  const text = String(promptText || "").replace(/https?:\/\/[^\s"'`)\]}>]+/gi, " ");
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (raw: string) => {
@@ -580,6 +589,9 @@ const BACKEND_RULES = [
   "- Register specific routes (e.g. /api/products/low-stock) BEFORE parameterised routes (e.g. /api/products/:id), or Express will swallow them.",
   "- POST create endpoints validate the body, assign the next numeric id, and answer 201 with the created item as JSON.",
   "- AUTH HYGIENE: NEVER include the password field in any API response. Register, login, list, get-one and update responses must strip it before sending (const { password, ...safe } = user; res.json(safe); — and map list items the same way). Passwords are stored only so login can check them; a response that echoes a password fails verification.",
+  "- STORE CONTRACT: lib/store.js collections expose create(data), list() (no arguments, returns all rows), get(id) (NUMERIC id only — never a function, object or filter), update(id, data), remove(id). Rows are plain JSON objects: there are NO model methods — no comparePassword, no save(), no token property. To find a row by a field (e.g. a user by email), call list() and filter the array in JavaScript. Login handlers compare the stored password field directly and respond with the row minus the password field.",
+  "- HEALTH: The health endpoint MUST be registered as GET /api/health (never POST).",
+  "- ASK/PROXY: For endpoints that forward a user message to an external AI/API and return its reply (e.g. an ask/chat endpoint): FIRST save the incoming user message to its collection, include the incoming message content in the upstream request, then save the upstream reply as a new row before responding.",
   "- Unknown /api/* routes answer 404 JSON. Add a JSON error handler. Never crash on bad input.",
   "- Listen on process.env.PORT || 3000 and log a startup line.",
   "- Declare every top-level name (app, PORT, pool, stores) exactly ONCE — a duplicated const declaration is a syntax error that fails the build.",

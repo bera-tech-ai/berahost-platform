@@ -399,6 +399,60 @@ export async function testProject(dir: string, files: Record<string, string>, te
 
     const responseBodies: { label: string; body: string }[] = [];
     const base = `http://127.0.0.1:${port}`;
+    // Auth hygiene probe setup (Fix R): the hygiene verdict below used
+    // to arm only when the plan's register sample carried a password
+    // of >= 4 chars — the BeraChat plan's sample used "pw", so the
+    // probe never armed while the generated app returned plaintext
+    // passwords in its list/get responses. Now the probe arms whenever
+    // a register-style POST exists in the plan: BEFORE the endpoint
+    // loop it performs its OWN registration with a synthetic body
+    // derived from the plan sample — a unique probe email (and
+    // username/phone when the sample carries them) and a synthetic
+    // >= 8-char password — so a user with a KNOWN password exists in
+    // the store while the loop's list/get/login tests run, and any
+    // response leaking passwords exposes the probe password. The
+    // registration is a setup request, not a recorded check; its
+    // response body joins the captured bodies like any other. If the
+    // dedicated registration fails (non-2xx), the verdict falls back
+    // to the original sample-based arming, so behaviour never
+    // regresses on apps whose register needs extra fields.
+    const isRegisterStyle = (t: AgentEndpointTest): boolean => {
+      if (String(t.method).toUpperCase() !== "POST") return false;
+      const p = String(t.path || "");
+      const n = String(t.name || "");
+      return /register|sign[-_ ]?up/i.test(p) || /register|sign[-_ ]?up/i.test(n) || /^\/api\/(users?|accounts?|members?|auth)\/?$/i.test(p);
+    };
+    const PROBE_PASSWORD = "ProbePass123!";
+    let probeArmed = false;
+    {
+      const template = tests.find(isRegisterStyle);
+      if (template) {
+        const sample: Record<string, any> = (template.body && typeof template.body === "object") ? { ...(template.body as any) } : {};
+        const suffix = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+        sample.password = PROBE_PASSWORD;
+        if (typeof sample.email === "string" && sample.email.includes("@")) {
+          const at = sample.email.indexOf("@");
+          sample.email = `${sample.email.slice(0, at)}+probe${suffix}${sample.email.slice(at)}`;
+        } else {
+          sample.email = `probe${suffix}@example.com`;
+        }
+        if (typeof sample.username === "string") sample.username = `${sample.username}-probe${suffix}`;
+        if (typeof sample.phone === "string") sample.phone = `07${String(Math.floor(Math.random() * 1e8)).padStart(8, "0")}`;
+        try {
+          const r = await fetch(`${base}${template.path}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(sample),
+            signal: AbortSignal.timeout(10000)
+          });
+          const text = await r.text().catch(() => "");
+          if (r.status >= 200 && r.status < 300) {
+            probeArmed = true;
+            responseBodies.push({ label: "Auth hygiene probe registration", body: text });
+          }
+        } catch { /* probe registration unreachable — the verdict falls back to sample-based arming */ }
+      }
+    }
     // Id-capture endpoint testing (Fix P): the plan writes id routes
     // with a literal id ("/api/users/1"), but a gate that runs against
     // an app's LIVE database — an edit gate inheriting the parent's
@@ -479,7 +533,20 @@ export async function testProject(dir: string, files: Record<string, string>, te
         const bodyText = await r.text().catch(() => "");
         responseBodies.push({ label, body: bodyText });
         const ok = expected.includes(r.status);
-        results.push({ name: label, ok, status: r.status, detail: ok ? `${t.method} ${effectivePath} -> ${r.status}` : `${t.method} ${effectivePath} -> ${r.status}, expected ${expected.join("/")}` });
+        let detail = ok ? `${t.method} ${effectivePath} -> ${r.status}` : `${t.method} ${effectivePath} -> ${r.status}, expected ${expected.join("/")}`;
+        // Health-method diagnosis (Fix R): a generated server once
+        // registered the health endpoint as POST, so GET /api/health
+        // 404'd and the bare status gave the repair loop nothing to
+        // aim at. When THIS endpoint test fails, a static scan of
+        // server.js names the wrong-method registration in the same
+        // result — no new check, just a precise target.
+        if (!ok && String(t.method).toUpperCase() === "GET" && effectivePath === "/api/health") {
+          const methods = [...serverCode.matchAll(/app\.(get|post|put|patch|delete)\(\s*['"]\/api\/health['"]/g)].map(m => m[1]);
+          if (methods.length && !methods.includes("get")) {
+            detail += ` — server.js registers /api/health with app.${methods[0]}(...) instead of app.get(...); the health endpoint MUST be registered as GET /api/health`;
+          }
+        }
+        results.push({ name: label, ok, status: r.status, detail });
       } catch (e: any) {
         results.push({ name: label, ok: false, detail: `${t.method} ${effectivePath} -> ${String(e?.message || e)}` });
       }
@@ -506,23 +573,21 @@ export async function testProject(dir: string, files: Record<string, string>, te
     // Auth hygiene: a generated register endpoint once shipped echoing
     // the created user INCLUDING its plaintext password (build 13) —
     // and its list/get-one endpoints returned every stored password.
-    // When the plan exercises a register-style POST with a sample
-    // password, no endpoint response may contain that password value.
+    // No endpoint response may contain a registration password: the
+    // Fix R probe password when the probe armed above, plus — exactly
+    // as before — any plan sample password of >= 4 chars carried by a
+    // register-style POST (which is also the whole test when the probe
+    // registration itself failed and the probe never armed).
     // STRICT (fresh builds): a failing check — the repair loop gets a
     // precise target. Edit gates (default): a non-failing warning, so
     // a pre-existing echo in a published server can never fail a
     // page-only edit or its server-preservation fallback.
-    const registerTests = tests.filter(t => {
-      if (String(t.method).toUpperCase() !== "POST") return false;
-      const pw = (t.body as any)?.password;
-      if (typeof pw !== "string" || pw.length < 4) return false;
-      const p = String(t.path || "");
-      const n = String(t.name || "");
-      return /register|sign[-_ ]?up/i.test(p) || /register|sign[-_ ]?up/i.test(n) || /^\/api\/(users?|accounts?|members?|auth)\/?$/i.test(p);
-    });
-    if (registerTests.length) {
-      const passwords = [...new Set(registerTests.map(t => String((t.body as any).password)))];
-      const offenders = responseBodies.filter(rb => passwords.some(pw => rb.body.includes(pw))).map(rb => rb.label);
+    const samplePasswords = [...new Set(tests
+      .filter(t => isRegisterStyle(t) && typeof (t.body as any)?.password === "string" && (t.body as any).password.length >= 4)
+      .map(t => String((t.body as any).password)))];
+    const hygienePasswords = probeArmed ? [PROBE_PASSWORD, ...samplePasswords] : samplePasswords;
+    if (hygienePasswords.length) {
+      const offenders = responseBodies.filter(rb => hygienePasswords.some(pw => rb.body.includes(pw))).map(rb => rb.label);
       if (offenders.length) {
         const what = `the response(s) to ${offenders.join(", ")} contain the plaintext password submitted at registration — strip the password field from every response (register, login, list, get-one, update)`;
         results.push(opts?.strictAuthHygiene
