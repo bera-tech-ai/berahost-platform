@@ -222,7 +222,17 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     await setBuild(buildId, { status: "publishing" });
     let repo: Awaited<ReturnType<typeof createGithubRepositoryWithRetry>>;
     try {
-      repo = await createGithubRepositoryWithRetry(token, `${base}-${crypto.randomBytes(2).toString("hex")}`, `Built with Agent Bera: ${build.prompt.slice(0, 100)}`, note);
+      // The repo's GitHub "About" is the plan's own summary of the app —
+      // never the user's raw prompt (which reads like a dumped instruction
+      // and truncates mid-word). Fall back to a short branded line.
+      const aboutText = String(plan.summary || "").replace(/\s+/g, " ").trim();
+      let repoDescription = aboutText;
+      if (repoDescription.length > 200) {
+        const cut = repoDescription.lastIndexOf(" ", 200);
+        repoDescription = repoDescription.slice(0, cut > 40 ? cut : 200).trim();
+      }
+      if (!repoDescription) repoDescription = `${plan.appName || "Web app"} — built with Agent Bera on BeraHost`;
+      repo = await createGithubRepositoryWithRetry(token, `${base}-${crypto.randomBytes(2).toString("hex")}`, repoDescription, note);
     } catch (e: any) {
       throw new Error(`GitHub repo creation failed: ${String(e?.message || e)}`);
     }
