@@ -144,6 +144,12 @@ export type AgentProjectPlan = {
   resource: string;
   resources: AgentResourcePlan[];
   endpoints: AgentEndpointTest[];
+  // Internal integrity marker: true when this plan came from the
+  // deterministic keyword fallback (fallbackPlan) rather than the AI
+  // planner — i.e. the AI plan could not be parsed and this is a guess.
+  // The build's plan guard (agentBuild) uses it to detect a degraded
+  // plan; it is never rendered to the user.
+  degraded?: boolean;
   // Context the platform gathered before planning: the user's earlier
   // builds (memory) and, when the user supplied one, the explored
   // contract of an external API this app should be built against.
@@ -196,7 +202,8 @@ export function fallbackPlan(promptText: string): AgentProjectPlan {
     summary: `Full-stack app for: ${promptText.slice(0, 160)}`,
     resource,
     resources: [{ name: resource, endpoints: endpoints.slice(1) }],
-    endpoints
+    endpoints,
+    degraded: true
   };
 }
 
@@ -257,6 +264,128 @@ async function planProjectInner(promptText: string, envKeys: string[] = [], cont
   } catch {
     return fallbackPlan(promptText);
   }
+}
+
+// --- Plan integrity ---------------------------------------------------------
+// planProject falls back to fallbackPlan (one keyword-guessed resource)
+// whenever the AI's plan JSON fails to parse — and for multi-resource
+// requests the plan JSON is long, the chat reply cap truncates it, and
+// parsing fails precisely on the biggest asks. Live builds 10 and 11
+// (2026-11-28) both died this way: a prompt demanding users, products,
+// team and enquiries was planned as products-only, and the build then
+// generated the wrong (tiny) app. The guard below makes the degradation
+// detectable: it extracts the resources the PROMPT itself demands,
+// compares them against the plan, and lets the build re-plan once in a
+// compact format (small enough to survive one reply) or stop honestly
+// at the planning stage.
+
+// Crude stemmer for comparing demanded names against plan names:
+// lowercased, "-ies" -> "-y", one trailing "s" stripped ("users" and
+// "user" compare equal, "enquiries" and "enquiry" compare equal).
+function stemWord(w: string): string {
+  let s = String(w || "").toLowerCase();
+  if (s.length > 4 && s.endsWith("ies")) s = s.slice(0, -3) + "y";
+  else if (s.length > 1 && s.endsWith("s") && !s.endsWith("ss")) s = s.slice(0, -1);
+  return s;
+}
+
+const DEMAND_STOPWORDS = new Set(["fields", "field", "endpoints", "endpoint", "resources", "resource", "note", "the", "a", "an", "data"]);
+
+// The API roots a prompt DEMANDS, deterministically: every distinct
+// /api/<segment> it names, plus the resource names it enumerates as
+// spec lists — "(1) users — …", "1. users — …", "- users — …". An
+// enumerated name only counts when a spec separator (—, – or :) follows
+// it immediately, which is what keeps feature bullets ("- Product
+// management.") and execution steps ("1. Build the API.") from being
+// mistaken for resources.
+export function demandedApiRoots(promptText: string): string[] {
+  const text = String(promptText || "");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const name = String(raw || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+    if (!name || name === "health" || DEMAND_STOPWORDS.has(name) || seen.has(name)) return;
+    seen.add(name);
+    out.push(name);
+  };
+  for (const m of text.matchAll(/\/api\/([a-z][a-z0-9-]*)/gi)) add(m[1]);
+  const enumPatterns = [
+    /\(\s*\d+\s*\)\s*([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g,
+    /(?:^|\n)\s*\d+\s*[.)]\s+([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g,
+    /(?:^|\n)\s*[-*•]\s+([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g
+  ];
+  for (const re of enumPatterns) for (const m of text.matchAll(re)) add(m[1]);
+  return out;
+}
+
+export type PlanCoverage = {
+  demanded: string[];
+  covered: string[];
+  missing: string[];
+  incomplete: boolean;
+};
+
+// Compare a plan against the prompt's own demands. A plan is INCOMPLETE
+// when it leaves a demanded root uncovered AND the request was big
+// enough to matter (≥2 demanded names) or the plan is the degraded
+// fallback. A degraded plan that still covers the demand, and a
+// non-degraded plan for a ≤1-root ask, proceed exactly as before.
+export function assessPlanCoverage(plan: AgentProjectPlan, promptText: string): PlanCoverage {
+  const demanded = demandedApiRoots(promptText);
+  const coveredStems = new Set<string>();
+  for (const r of plan.resources || []) if (r?.name) coveredStems.add(stemWord(r.name));
+  for (const e of plan.endpoints || []) {
+    const m = String(e?.path || "").match(/^\/api\/([a-z0-9-]+)/i);
+    if (m && m[1].toLowerCase() !== "health") coveredStems.add(stemWord(m[1]));
+  }
+  const covered = demanded.filter(d => coveredStems.has(stemWord(d)));
+  const missing = demanded.filter(d => !coveredStems.has(stemWord(d)));
+  const incomplete = missing.length > 0 && (demanded.length >= 2 || plan.degraded === true);
+  return { demanded, covered, missing, incomplete };
+}
+
+// The compact re-plan: the same planner, but the reply is kept small
+// enough to survive the chat endpoints' per-reply cap — appName, a
+// one-line summary, and per resource ONLY a name, a fields map and bare
+// endpoints (no endpoint names, no prose descriptions, no expected
+// arrays). Explicitly lists the resources the request requires.
+export async function planProjectCompact(promptText: string, required: string[], envKeys: string[] = [], context?: { history?: string; externalApi?: { url: string; excerpt: string } }): Promise<AgentProjectPlan> {
+  let plan: AgentProjectPlan;
+  try {
+    const raw = await agentChat(
+      "System: You are Agent Bera's project planner. Reply with ONLY a compact JSON object — no markdown, no commentary, no extra words. Keep the WHOLE reply as small as possible: it must fit one short message.\n" +
+      "Shape: {\"appName\": string (short), \"summary\": string (ONE line), \"resources\": [{\"name\": string (one lowercase plural word), \"fields\": {\"fieldName\": \"string|number|boolean\"}, \"endpoints\": [{\"method\": \"GET|POST|PUT|PATCH|DELETE\", \"path\": \"/api/...\", \"body\": object (POST/PUT only)}]}]}\n" +
+      "Rules: include EXACTLY these resources, no more, no fewer: " + required.join(", ") + ". Per resource include a list endpoint, a create endpoint whose body is a realistic sample built from its fields, and a get-one endpoint with a concrete id like /api/products/1; add update/delete endpoints where natural, and include any extra endpoint the request explicitly names (for example a login endpoint). Do NOT add endpoint \"name\" or \"expected\" fields — keep every endpoint to method, path and body only. Keep the TOTAL across all resources to at most 20 endpoints.\n" +
+      (envKeys.length ? `\nThe app will run with these environment variables available (names only): ${envKeys.join(", ")}.\n` : "") +
+      "\nUser: Plan a full-stack web app for this request: " + promptText,
+      90000);
+    const parsed = extractJsonObject(raw);
+    if (!parsed || !Array.isArray(parsed.resources) || !parsed.resources.length) return fallbackPlan(promptText);
+    const seen = new Set<string>();
+    const cleanEndpoints = (list: any): AgentEndpointTest[] => (Array.isArray(list) ? list : [])
+      .map(sanitizeEndpoint).filter(Boolean)
+      .filter((e: any) => { const k = `${(e as AgentEndpointTest).method} ${(e as AgentEndpointTest).path}`; if (seen.has(k)) return false; seen.add(k); return true; }) as AgentEndpointTest[];
+    const resources: AgentResourcePlan[] = parsed.resources.slice(0, 6).map((r: any) => ({
+      name: String(r?.name || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items",
+      endpoints: cleanEndpoints(r?.endpoints)
+    })).filter((r: AgentResourcePlan) => r.endpoints.length > 0);
+    if (!resources.length) return fallbackPlan(promptText);
+    const endpoints: AgentEndpointTest[] = [{ name: "Health check", method: "GET", path: "/api/health", expected: [200] },
+      ...resources.flatMap(r => r.endpoints).filter(e => e.path !== "/api/health")].slice(0, 21);
+    if (endpoints.length < 3) return fallbackPlan(promptText);
+    plan = {
+      appName: String(parsed.appName || "").replace(/\s+/g, " ").trim().slice(0, 60) || fallbackPlan(promptText).appName,
+      summary: String(parsed.summary || "").replace(/\s+/g, " ").trim().slice(0, 240),
+      resource: resources[0].name,
+      resources,
+      endpoints
+    };
+  } catch {
+    return fallbackPlan(promptText);
+  }
+  if (context?.externalApi) plan.externalApi = context.externalApi;
+  if (context?.history) plan.historyNote = context.history;
+  return plan;
 }
 
 const stripAnyFences = (s: string) => String(s || "").replace(/^\s*```[a-zA-Z]*\s*\n?/, "").replace(/\n?```\s*$/i, "").trim();
@@ -737,6 +866,68 @@ export async function repairBackendServer(promptText: string, plan: AgentProject
     throw new Error("The repaired backend was still incomplete.");
   }
   return code;
+}
+
+// --- Targeted syntax repair -------------------------------------------------
+// The full-file repair above regenerates server.js from scratch — and
+// for a pure syntax error that re-rolls the same truncation/stitching
+// dice that broke the file in the first place (live builds 10/11: the
+// repair rounds oscillated 0/1 -> 7/8 -> 0/1 and never converged). But
+// node --check names the EXACT failing line. When it does, patch just
+// the window around that line and splice it back: the rest of the file
+// — the parts that already worked — is never regenerated.
+
+// The 1-based line a node --check failure blames, or null when the
+// detail does not name one ("server.js:252", "...js:252", "line 252").
+export function syntaxErrorLine(detail: string): number | null {
+  const text = String(detail || "");
+  const m = text.match(/\.js:(\d+)\b/) || text.match(/\bline (\d+)\b/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Ask the AI to correct ONLY the ±40-line window around the syntax
+// error and splice its answer over that window. Returns the full
+// patched file, or null when anything about the attempt is unusable
+// (no line number, empty/garbled reply, a reply wildly longer or
+// shorter than the window) — the caller then falls back to the
+// full-file repair, unchanged.
+export async function repairSyntaxWindow(plan: AgentProjectPlan, code: string, syntaxDetail: string): Promise<string | null> {
+  const line = syntaxErrorLine(syntaxDetail);
+  if (line === null) return null;
+  const lines = String(code || "").split("\n");
+  if (line > lines.length) return null;
+  const start = Math.max(1, line - 40);
+  const end = Math.min(lines.length, line + 40);
+  const windowLines = lines.slice(start - 1, end);
+  const numbered = windowLines.map((l, i) => `${start + i}: ${l}`).join("\n");
+  let raw: string;
+  try {
+    raw = await agentChat(
+      "System: You are fixing ONE JavaScript syntax error in a Node.js/Express server file. The syntax checker reported this error:\n" + String(syntaxDetail).slice(0, 700) +
+      `\n\nBelow are lines ${start}-${end} of the file (of ${lines.length} total), each prefixed with its line number. Return ONLY the corrected replacement lines for lines ${start}-${end}: no line numbers, no markdown fences, no explanations, no commentary. Preserve the window's behaviour and content — change only what the syntax error requires (remove a stray closing token, close an open block, fix a bracket). Do not add new endpoints or rename anything.\n\n` + numbered,
+      90000);
+  } catch { return null; }
+  let replyLines = stripAnyFences(raw).split("\n");
+  // Tolerate an AI that echoes the line numbers back: strip the
+  // prefixes only when (nearly) every line carries one AND the first
+  // number is the window's start — a mid-object numeric key in real
+  // code must never be eaten by this.
+  const nonEmpty = replyLines.filter(l => l.trim().length > 0);
+  const numberedCount = nonEmpty.filter(l => /^\s*\d+\s*:\s/.test(l)).length;
+  if (nonEmpty.length > 0 && numberedCount >= Math.ceil(nonEmpty.length * 0.8)) {
+    const firstNum = Number((nonEmpty[0].match(/^\s*(\d+)\s*:/) || [])[1]);
+    if (firstNum === start) replyLines = replyLines.map(l => l.replace(/^\s*\d+\s*:\s?/, ""));
+  }
+  while (replyLines.length && replyLines[0].trim() === "") replyLines.shift();
+  while (replyLines.length && replyLines[replyLines.length - 1].trim() === "") replyLines.pop();
+  if (!replyLines.length) return null;
+  if (replyLines.some(l => /^\s*```/.test(l))) return null;
+  if (replyLines.length < Math.ceil(windowLines.length * 0.5) || replyLines.length > windowLines.length * 2) return null;
+  const spliced = [...lines.slice(0, start - 1), ...replyLines, ...lines.slice(end)].join("\n");
+  if (spliced === code) return null;
+  return normalizeServerCode(spliced, plan);
 }
 
 const FRONTEND_RULES = [

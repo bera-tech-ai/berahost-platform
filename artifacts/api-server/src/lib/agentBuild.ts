@@ -5,7 +5,7 @@ import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, isNull, ne, and } from "drizzle-orm";
 import { createGithubRepositoryWithRetry, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
-import { planProject, generateProjectFiles, repairBackendServer, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
+import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
 import { exploreExternalApi, type ExploredApi } from "./agentExplore";
@@ -124,7 +124,11 @@ async function verifyWithRepair(ctx: VerifyCtx, slug: string): Promise<LiveCheck
 export async function runAgentBuild(buildId: number): Promise<void> {
   const [build] = await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, buildId));
   if (!build) return;
-  const lines: string[] = [];
+  // Seed the log from the row: a fresh build has none, but a RETRY
+  // (routes/agentBera.ts) deliberately keeps the previous attempt's log
+  // — separator line included — and this run appends below it instead
+  // of wiping it with the first note.
+  const lines: string[] = build.buildLog ? String(build.buildLog).split("\n") : [];
   const note = async (line: string) => { lines.push(`[${new Date().toISOString()}] ${line}`); await setBuild(buildId, { buildLog: lines.join("\n") }); };
   let tmpDir: string | null = null;
   try {
@@ -172,9 +176,30 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     }
     const envKeys = Object.keys(envVars);
 
-    // 1. Plan
+    // 1. Plan — with an integrity guard. When the planner's JSON is too
+    // long for one AI reply it truncates, parsing fails, and planProject
+    // falls back to a one-resource keyword guess; on a multi-resource
+    // request the build then generates the WRONG app (seen live, builds
+    // 10/11: a 4-resource prompt planned as products-only, twice). The
+    // guard compares the plan against the resources the prompt itself
+    // demands, re-plans once in a compact format that fits one reply,
+    // and stops the build at planning if the plan still falls short.
     await setBuild(buildId, { status: "planning" });
-    const plan: AgentProjectPlan = await planProject(build.prompt, envKeys, { history, externalApi: explored ? { url: explored.url, excerpt: explored.excerpt } : undefined });
+    const planContext = { history, externalApi: explored ? { url: explored.url, excerpt: explored.excerpt } : undefined };
+    let plan: AgentProjectPlan = await planProject(build.prompt, envKeys, planContext);
+    let coverage = assessPlanCoverage(plan, build.prompt);
+    if (coverage.incomplete) {
+      const coveredText = coverage.covered.length ? coverage.covered.join(", ") : (plan.resources.map(r => r.name).join(", ") || "nothing");
+      await note(`Plan check: the first plan only covered ${coveredText}; the request also requires ${coverage.missing.join(", ")}. Re-planning with a compact plan format…`);
+      plan = await planProjectCompact(build.prompt, coverage.demanded, envKeys, planContext);
+      await setBuild(buildId, { plan, name: plan.appName || build.name });
+      coverage = assessPlanCoverage(plan, build.prompt);
+      if (coverage.incomplete) {
+        const stillCovered = coverage.covered.length ? coverage.covered.join(", ") : (plan.resources.map(r => r.name).join(", ") || "part of the request");
+        await note(`Plan check: the compact plan still does not cover ${coverage.missing.join(", ")} — stopping at planning`);
+        throw new Error(`The planner could only cover ${stillCovered}, but this app also needs ${coverage.missing.join(", ")}, so the build was stopped at planning instead of generating the wrong app. Try splitting the request or rephrasing it.`);
+      }
+    }
     await setBuild(buildId, { plan, name: plan.appName || build.name });
     await note(`Plan: ${plan.appName} — ${plan.resources.length} resource(s), ${plan.endpoints.length} API endpoints (${plan.endpoints.map(e => `${e.method} ${e.path}`).join(", ")})`);
     if (envKeys.length) await note(`Environment variables provided: ${envKeys.join(", ")}`);
@@ -198,9 +223,27 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     let bestFiles = { ...files };
     let bestReport = report;
     const score = (r: TestReport) => r.results.filter(x => x.ok).length;
+    // Targeted syntax repair gets the first attempt at a syntax
+    // failure: node --check names the exact line, so patching that
+    // window converges where whole-file regenerations oscillated
+    // (builds 10/11). At most two window attempts per build; anything
+    // else — and every non-syntax failure — uses the full-file repair
+    // below, unchanged.
+    let syntaxWindowAttempts = 0;
     for (let round = 1; round <= 3 && !bestReport.ok; round++) {
-      await note(`Repair round ${round}: fixing the failing checks in the backend`);
-      const candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
+      const syntaxCheck = bestReport.results.find(r => !r.ok && /^Syntax: server\.js$/i.test(r.name));
+      const syntaxLine = syntaxCheck && syntaxWindowAttempts < 2 ? syntaxErrorLine(syntaxCheck.detail) : null;
+      let candidate: Record<string, string> | null = null;
+      if (syntaxCheck && syntaxLine !== null) {
+        syntaxWindowAttempts++;
+        await note(`Repair round ${round}: targeted syntax fix at line ${syntaxLine} (window patch)`);
+        const patched = await repairSyntaxWindow(plan, bestFiles["server.js"], syntaxCheck.detail).catch(() => null);
+        if (patched) candidate = { ...bestFiles, "server.js": patched };
+      }
+      if (!candidate) {
+        await note(`Repair round ${round}: fixing the failing checks in the backend`);
+        candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
+      }
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"] });
       report = await testProject(tmpDir, candidate, plan.endpoints, envVars);
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
