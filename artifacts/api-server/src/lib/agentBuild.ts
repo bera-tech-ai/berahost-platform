@@ -5,7 +5,7 @@ import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, isNull, ne, and } from "drizzle-orm";
 import { createGithubRepositoryWithRetry, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
-import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, repairFrontend, editProjectFiles, ensurePlatformWiring, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
+import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, repairFrontend, editProjectFiles, ensurePlatformWiring, ensurePlannedRoutes, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
 import { exploreExternalApi, type ExploredApi } from "./agentExplore";
@@ -26,6 +26,19 @@ async function setBuild(id: number, patch: Record<string, any>): Promise<void> {
 
 function failureSummary(report: TestReport): string {
   return report.results.filter(r => !r.ok).map(r => `${r.name}: ${r.detail}`).join("\n") + "\n" + report.log;
+}
+
+// Fix S: apply ensurePlannedRoutes to a file set and log what the
+// platform completed. Returns the (possibly new) server.js content;
+// call sites assign it exactly where they assign the wiring layer's
+// output for the page. Idempotent — an already-treated server adds
+// nothing and logs nothing.
+async function applyPlannedRoutes(files: Record<string, string>, plan: AgentProjectPlan, note: (line: string) => Promise<void>): Promise<string> {
+  const completed = ensurePlannedRoutes(files, plan);
+  if (completed.added.length) {
+    await note(`Platform completed ${completed.added.length} missing API route(s) with canonical handlers: ${completed.added.join(", ")}`);
+  }
+  return completed.files["server.js"];
 }
 
 function envOf(build: any): Record<string, string> {
@@ -214,6 +227,11 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     // remembering to write it. Idempotent; re-applied before every
     // gate below so a repair that replaces the page cannot lose it.
     files["public/index.html"] = ensurePlatformWiring(files["public/index.html"], plan);
+    // Fix S: the same guarantee for the backend — planned CRUD routes
+    // the generator omitted are completed with canonical handlers
+    // before the first gate (build 31's missing enquiries routes
+    // survived three AI repair rounds; they do not survive this).
+    files["server.js"] = await applyPlannedRoutes(files, plan, note);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes
@@ -275,6 +293,9 @@ export async function runAgentBuild(buildId: number): Promise<void> {
       // Fix M: whichever file the repair replaced, the page that
       // reaches the gate carries the platform wiring layer.
       if (candidate) candidate["public/index.html"] = ensurePlatformWiring(candidate["public/index.html"], plan);
+      // Fix S: and whichever server the repair produced, its planned
+      // routes are complete before the gate re-runs.
+      if (candidate) candidate["server.js"] = await applyPlannedRoutes(candidate, plan, note);
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
       report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan, { strictAuthHygiene: true });
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
@@ -430,6 +451,9 @@ export async function runAgentEdit(buildId: number): Promise<void> {
     // below compares `edited` against the originals, so injection
     // alone never counts as the user's edit.)
     files["public/index.html"] = ensurePlatformWiring(files["public/index.html"], plan);
+    // Fix S: the edited server likewise reaches its gate with every
+    // planned route present (canonical handlers for absent ones).
+    files["server.js"] = await applyPlannedRoutes(files, plan, note);
     const changed = [
       ...(edited.server !== serverFile.content ? ["server.js"] : []),
       ...(edited.frontend !== frontFile.content ? ["public/index.html"] : [])
@@ -464,6 +488,7 @@ export async function runAgentEdit(buildId: number): Promise<void> {
         candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
       }
       if (candidate) candidate["public/index.html"] = ensurePlatformWiring(candidate["public/index.html"], plan);
+      if (candidate) candidate["server.js"] = await applyPlannedRoutes(candidate, plan, note);
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
       report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
@@ -492,6 +517,10 @@ export async function runAgentEdit(buildId: number): Promise<void> {
         // Fix M composes with the fallback: whichever server the set
         // carries, its page is the wired one.
         fallbackFiles["public/index.html"] = ensurePlatformWiring(fallbackFiles["public/index.html"], plan);
+        // Fix S composes the same way: the ORIGINAL server kept by
+        // the fallback may itself be missing planned routes (that is
+        // often why the app needs an edit), so it is completed too.
+        fallbackFiles["server.js"] = await applyPlannedRoutes(fallbackFiles, plan, note);
         await writeProjectFiles(tmpDir, { "server.js": fallbackFiles["server.js"], "public/index.html": fallbackFiles["public/index.html"] });
         const fallbackReport = await testProject(tmpDir, fallbackFiles, plan.endpoints, envVars, plan);
         if (fallbackReport.ok) {
