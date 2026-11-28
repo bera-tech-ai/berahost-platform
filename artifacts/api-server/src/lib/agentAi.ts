@@ -298,6 +298,13 @@ const DEMAND_STOPWORDS = new Set(["fields", "field", "endpoints", "endpoint", "r
 // it immediately, which is what keeps feature bullets ("- Product
 // management.") and execution steps ("1. Build the API.") from being
 // mistaken for resources.
+//
+// An enumerated name can run to THREE words — "(3) Team members — …"
+// (build 13's prose prompt: the one-word capture demanded nothing for
+// the team, so the guard never missed it). A multi-word name becomes
+// ONE phrase demand ("team members") in the returned list; coverage
+// accepts a plan that names the resource by either end of the phrase
+// (see assessPlanCoverage).
 export function demandedApiRoots(promptText: string): string[] {
   const text = String(promptText || "");
   const out: string[] = [];
@@ -308,13 +315,26 @@ export function demandedApiRoots(promptText: string): string[] {
     seen.add(name);
     out.push(name);
   };
+  const addEnum = (rawPhrase: string) => {
+    const rawWords = String(rawPhrase || "").toLowerCase().split(/\s+/).map(w => w.replace(/[^a-z0-9-]/g, "")).filter(Boolean);
+    // "health" anywhere in the item means the health endpoint, never a
+    // resource; stopwords ("the", "fields", …) carry no demand.
+    if (!rawWords.length || rawWords.includes("health")) return;
+    const words = rawWords.filter(w => !DEMAND_STOPWORDS.has(w));
+    if (!words.length) return;
+    if (words.length === 1) { add(words[0]); return; }
+    const phrase = words.slice(0, 3).join(" ");
+    if (seen.has(phrase)) return;
+    seen.add(phrase);
+    out.push(phrase);
+  };
   for (const m of text.matchAll(/\/api\/([a-z][a-z0-9-]*)/gi)) add(m[1]);
   const enumPatterns = [
-    /\(\s*\d+\s*\)\s*([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g,
-    /(?:^|\n)\s*\d+\s*[.)]\s+([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g,
-    /(?:^|\n)\s*[-*•]\s+([a-zA-Z][a-zA-Z0-9-]*)\s*(?:—|–|:)/g
+    /\(\s*\d+\s*\)\s*([a-zA-Z][a-zA-Z0-9-]*(?:\s+[a-zA-Z][a-zA-Z0-9-]*){0,2})\s*(?:—|–|:)/g,
+    /(?:^|\n)\s*\d+\s*[.)]\s+([a-zA-Z][a-zA-Z0-9-]*(?:\s+[a-zA-Z][a-zA-Z0-9-]*){0,2})\s*(?:—|–|:)/g,
+    /(?:^|\n)\s*[-*•]\s+([a-zA-Z][a-zA-Z0-9-]*(?:\s+[a-zA-Z][a-zA-Z0-9-]*){0,2})\s*(?:—|–|:)/g
   ];
-  for (const re of enumPatterns) for (const m of text.matchAll(re)) add(m[1]);
+  for (const re of enumPatterns) for (const m of text.matchAll(re)) addEnum(m[1]);
   return out;
 }
 
@@ -338,8 +358,18 @@ export function assessPlanCoverage(plan: AgentProjectPlan, promptText: string): 
     const m = String(e?.path || "").match(/^\/api\/([a-z0-9-]+)/i);
     if (m && m[1].toLowerCase() !== "health") coveredStems.add(stemWord(m[1]));
   }
-  const covered = demanded.filter(d => coveredStems.has(stemWord(d)));
-  const missing = demanded.filter(d => !coveredStems.has(stemWord(d)));
+  // A single-word demand is covered by a plan stem of the same name. A
+  // multi-word phrase demand ("team members") is covered when the plan
+  // names the resource by EITHER end of the phrase — stemmed first word
+  // ("team") or stemmed last word ("member") — because the planner
+  // picks the resource name; the prompt only picked the concept.
+  const isCovered = (d: string): boolean => {
+    const words = d.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return coveredStems.has(stemWord(d));
+    return coveredStems.has(stemWord(words[0])) || coveredStems.has(stemWord(words[words.length - 1]));
+  };
+  const covered = demanded.filter(isCovered);
+  const missing = demanded.filter(d => !isCovered(d));
   const incomplete = missing.length > 0 && (demanded.length >= 2 || plan.degraded === true);
   return { demanded, covered, missing, incomplete };
 }
@@ -936,9 +966,13 @@ const FRONTEND_RULES = [
   "- Output ONLY the HTML code. No markdown fences, no explanations.",
   "- All CSS in a <style> tag in <head>, all JS in a <script> tag before </body>.",
   "- Keep the file compact and efficient (concise CSS, no repeated blocks) so the COMPLETE file stays as short as a polished page allows — target at most ~12,000 characters. An unfinished file is a failed build.",
-  "- The page MUST load its real data from the backend API with fetch() — call the plan's main GET list endpoint and render the items dynamically (cards or a table). Never hard-code the data as the only source.",
+  "- The page MUST load its real data from the backend API with fetch() — call the GET list endpoint of EVERY resource in the plan and render the items dynamically (cards or a table). Never hard-code the data as the only source.",
   "- If the plan has a POST create endpoint, include a working form that POSTs JSON to it and refreshes the list, showing a success/error message.",
+  "- API paths MUST be relative with NO leading slash: fetch('api/products'), never fetch('/api/products'). The app is served under a /web/<slug> base path, so an absolute '/api/…' path hits the platform's own API instead of this app's — every call fails.",
+  "- AUTH: if the plan includes a login endpoint, or a users resource whose create endpoint is the registration, the page MUST include working register and login forms that POST JSON to those exact endpoints, display the server's real success/error response, and reflect the signed-in state (the user's name and a logout control after login). A Login link or button that does not open a working login form is FORBIDDEN.",
+  "- EVERY form on the page MUST submit to its planned backend endpoint with fetch() and show the real result. Placeholder handlers are FORBIDDEN: no alert-only submit handlers, no fake success messages, no simulated data — if a form exists, it posts to the API.",
   "- On load, check GET /api/health and show a small 'API online/offline' status indicator.",
+  "- The health indicator MUST settle: when the health fetch resolves it shows 'API online', when it fails it shows 'API offline' — never leave a permanent 'checking…' label on the page.",
   "- Modern, professional design that fits the business: strong typography (Google Fonts CDN allowed), real copy (never lorem ipsum), a committed colour theme.",
   "- Mobile-friendly: <meta name=\"viewport\"> and responsive CSS with media queries.",
   "- The file MUST be complete: end with </body></html>."
@@ -970,6 +1004,41 @@ export async function generateFrontend(promptText: string, plan: AgentProjectPla
     if (looksComplete(fresh) || fresh.length > html.length) html = fresh;
   }
   if (!looksComplete(html)) throw new Error("The generated frontend came back incomplete, so nothing was published. Please try again.");
+  return html;
+}
+
+// Repair a frontend that FAILED the wiring gate: the backend is real
+// and green, but the page never calls it (build 13 shipped a brochure
+// with zero fetch calls, a decorative Login link and an alert-only
+// contact form behind a 26/26 backend pass). The repair is told the
+// gate's exact faults and instructed to fix ONLY the wiring — the
+// design, layout and copy are the page's own and stay. Completeness
+// handling mirrors generateFrontend: stitch, continue, retry.
+export async function repairFrontend(promptText: string, plan: AgentProjectPlan, currentHtml: string, failureDetail: string): Promise<string> {
+  const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
+  // When the page is long, keep its head AND its tail: the wiring
+  // scripts live at the end of the file, exactly what a head-only
+  // slice would cut off before the repair ever saw them.
+  const current = currentHtml.length > 11000
+    ? currentHtml.slice(0, 4000) + "\n<!-- …middle of the file omitted… -->\n" + currentHtml.slice(-7000)
+    : currentHtml;
+  const attempt = () => stitchCode(
+    "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText +
+    "\n\nBackend API endpoints available:\n" + endpointList +
+    "\n\nThe pre-publish gate found these wiring faults in the current page:\n" + String(failureDetail || "").slice(0, 1500) +
+    "\n\nFix ONLY the wiring: add or repair the exact calls and forms the gate lists, keep the design, layout, copy and every working part of the current page. Return the COMPLETE corrected HTML file.\n\nCurrent public/index.html:\n" + current,
+    "HTML",
+    (c) => looksComplete(c),
+    8);
+  let html = await attempt();
+  for (let attemptNo = 2; attemptNo <= 3 && !looksComplete(html); attemptNo++) {
+    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8);
+    if (looksComplete(continued)) { html = continued; break; }
+    if (continued.length > html.length) html = continued;
+    const fresh = await attempt();
+    if (looksComplete(fresh) || fresh.length > html.length) html = fresh;
+  }
+  if (!looksComplete(html)) throw new Error("The repaired frontend was still incomplete.");
   return html;
 }
 

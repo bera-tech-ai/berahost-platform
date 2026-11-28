@@ -5,7 +5,7 @@ import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, isNull, ne, and } from "drizzle-orm";
 import { createGithubRepositoryWithRetry, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
-import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
+import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, repairFrontend, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
 import { exploreExternalApi, type ExploredApi } from "./agentExplore";
@@ -91,7 +91,7 @@ async function verifyWithRepair(ctx: VerifyCtx, slug: string): Promise<LiveCheck
     const candidate = { ...ctx.files, "server.js": repaired };
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bera-live-"));
     await writeProjectFiles(tmpDir, candidate);
-    const gate = await testProject(tmpDir, candidate, ctx.plan.endpoints, ctx.envVars);
+    const gate = await testProject(tmpDir, candidate, ctx.plan.endpoints, ctx.envVars, ctx.plan);
     if (!gate.ok) {
       await ctx.note("Post-deploy repair did not pass the endpoint tests, so the live app was left unchanged");
       return live;
@@ -214,7 +214,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     await setBuild(buildId, { status: "testing" });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bera-"));
     await writeProjectFiles(tmpDir, files);
-    let report = await testProject(tmpDir, files, plan.endpoints, envVars);
+    let report = await testProject(tmpDir, files, plan.endpoints, envVars, plan);
     await setBuild(buildId, { testResults: report });
     await note(`Endpoint tests: ${report.results.filter(r => r.ok).length}/${report.results.length} checks passed`);
     // Repair loop: always repair from the BEST version seen so far, and
@@ -230,22 +230,39 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     // else — and every non-syntax failure — uses the full-file repair
     // below, unchanged.
     let syntaxWindowAttempts = 0;
+    // Frontend wiring repair: when the ONLY failing check is the
+    // wiring gate — the backend fully green but the page never calls
+    // it (build 13's brochure) — the round is spent on the frontend,
+    // not on another backend regeneration. At most two attempts per
+    // build; a page still unwired after that fails the build
+    // unpublished, with the wiring detail in the error.
+    let frontendAttempts = 0;
     for (let round = 1; round <= 3 && !bestReport.ok; round++) {
-      const syntaxCheck = bestReport.results.find(r => !r.ok && /^Syntax: server\.js$/i.test(r.name));
-      const syntaxLine = syntaxCheck && syntaxWindowAttempts < 2 ? syntaxErrorLine(syntaxCheck.detail) : null;
+      const wiringCheck = bestReport.results.find(r => !r.ok && r.name === "Frontend wiring");
+      const wiringOnly = !!wiringCheck && bestReport.results.every(r => r.ok || r.name === "Frontend wiring");
       let candidate: Record<string, string> | null = null;
-      if (syntaxCheck && syntaxLine !== null) {
-        syntaxWindowAttempts++;
-        await note(`Repair round ${round}: targeted syntax fix at line ${syntaxLine} (window patch)`);
-        const patched = await repairSyntaxWindow(plan, bestFiles["server.js"], syntaxCheck.detail).catch(() => null);
-        if (patched) candidate = { ...bestFiles, "server.js": patched };
+      if (wiringCheck && wiringOnly && frontendAttempts < 2) {
+        frontendAttempts++;
+        await note(`Repair round ${round}: fixing the frontend wiring (${wiringCheck.detail.slice(0, 220)})`);
+        const repairedHtml = await repairFrontend(build.prompt, plan, bestFiles["public/index.html"], wiringCheck.detail).catch(() => null);
+        if (repairedHtml) candidate = { ...bestFiles, "public/index.html": repairedHtml };
+      }
+      if (!candidate) {
+        const syntaxCheck = bestReport.results.find(r => !r.ok && /^Syntax: server\.js$/i.test(r.name));
+        const syntaxLine = syntaxCheck && syntaxWindowAttempts < 2 ? syntaxErrorLine(syntaxCheck.detail) : null;
+        if (syntaxCheck && syntaxLine !== null) {
+          syntaxWindowAttempts++;
+          await note(`Repair round ${round}: targeted syntax fix at line ${syntaxLine} (window patch)`);
+          const patched = await repairSyntaxWindow(plan, bestFiles["server.js"], syntaxCheck.detail).catch(() => null);
+          if (patched) candidate = { ...bestFiles, "server.js": patched };
+        }
       }
       if (!candidate) {
         await note(`Repair round ${round}: fixing the failing checks in the backend`);
         candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
       }
-      await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"] });
-      report = await testProject(tmpDir, candidate, plan.endpoints, envVars);
+      await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
+      report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
       await setBuild(buildId, { testResults: bestReport });
@@ -254,7 +271,8 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     Object.assign(files, bestFiles);
     if (!report.ok) {
       const failed = report.results.filter(r => !r.ok).map(r => r.name).join(", ");
-      throw new Error(`The build failed its pre-publish endpoint tests (${failed}), so nothing was published. The failing checks are listed on the build.`);
+      const wiring = report.results.find(r => !r.ok && r.name === "Frontend wiring");
+      throw new Error(`The build failed its pre-publish endpoint tests (${failed}), so nothing was published.${wiring ? ` Frontend wiring: ${wiring.detail}` : ""} The failing checks are listed on the build.`);
     }
 
     // 4. Publish to a fresh repo under the user's GitHub account. The
@@ -377,15 +395,30 @@ export async function runAgentEdit(buildId: number): Promise<void> {
     await setBuild(buildId, { status: "testing" });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bera-edit-"));
     await writeProjectFiles(tmpDir, files);
-    let report = await testProject(tmpDir, files, plan.endpoints, envVars);
+    let report = await testProject(tmpDir, files, plan.endpoints, envVars, plan);
     let bestFiles = { ...files };
     let bestReport = report;
     const score = (r: TestReport) => r.results.filter(x => x.ok).length;
+    // Same frontend-wiring branch as the fresh-build loop: an edit
+    // whose only failing check is the wiring gate spends its round on
+    // the frontend (at most two attempts), not the backend.
+    let frontendAttempts = 0;
     for (let round = 1; round <= 2 && !bestReport.ok; round++) {
-      await note(`Repair round ${round}: fixing the failing checks in the edited backend`);
-      const candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
-      await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"] });
-      report = await testProject(tmpDir, candidate, plan.endpoints, envVars);
+      const wiringCheck = bestReport.results.find(r => !r.ok && r.name === "Frontend wiring");
+      const wiringOnly = !!wiringCheck && bestReport.results.every(r => r.ok || r.name === "Frontend wiring");
+      let candidate: Record<string, string> | null = null;
+      if (wiringCheck && wiringOnly && frontendAttempts < 2) {
+        frontendAttempts++;
+        await note(`Repair round ${round}: fixing the frontend wiring (${wiringCheck.detail.slice(0, 220)})`);
+        const repairedHtml = await repairFrontend(build.prompt, plan, bestFiles["public/index.html"], wiringCheck.detail).catch(() => null);
+        if (repairedHtml) candidate = { ...bestFiles, "public/index.html": repairedHtml };
+      }
+      if (!candidate) {
+        await note(`Repair round ${round}: fixing the failing checks in the edited backend`);
+        candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
+      }
+      await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
+      report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
       await setBuild(buildId, { testResults: bestReport });
     }
@@ -393,8 +426,34 @@ export async function runAgentEdit(buildId: number): Promise<void> {
     Object.assign(files, bestFiles);
     await setBuild(buildId, { testResults: report });
     if (!report.ok) {
+      // Server-preservation fallback: editProjectFiles regenerates
+      // BOTH files even for a page-only ask, and a regenerated backend
+      // that hangs or crashes must not kill an edit whose page is
+      // good (edit build 16: the wiring fix died because the new
+      // server never answered /api/health). When the failure is on
+      // backend grounds — server.js syntax, boot, or the endpoint
+      // checks — and the edit did produce a different page, re-run
+      // the gate ONCE with the ORIGINAL published server.js and the
+      // edited frontend. If that set passes, only the page changes.
+      const endpointNames = new Set(plan.endpoints.map(e => e.name || `${e.method} ${e.path}`));
+      const backendGrounds = report.results.some(r => !r.ok && (r.name === "Syntax: server.js" || r.name === "Server boots" || endpointNames.has(r.name)));
+      const frontendChanged = files["public/index.html"] !== frontFile.content;
+      if (backendGrounds && frontendChanged) {
+        const fallbackFiles: Record<string, string> = { ...files, "server.js": serverFile.content };
+        await writeProjectFiles(tmpDir, { "server.js": fallbackFiles["server.js"], "public/index.html": fallbackFiles["public/index.html"] });
+        const fallbackReport = await testProject(tmpDir, fallbackFiles, plan.endpoints, envVars, plan);
+        if (fallbackReport.ok) {
+          await note("The edited backend failed its checks, so the original server was kept and only the page changed.");
+          Object.assign(files, fallbackFiles);
+          report = fallbackReport;
+          await setBuild(buildId, { testResults: report });
+        }
+      }
+    }
+    if (!report.ok) {
       const failed = report.results.filter(r => !r.ok).map(r => r.name).join(", ");
-      throw new Error(`The edit failed its endpoint tests (${failed}), so the live app was left unchanged.`);
+      const wiring = report.results.find(r => !r.ok && r.name === "Frontend wiring");
+      throw new Error(`The edit failed its endpoint tests (${failed}), so the live app was left unchanged.${wiring ? ` Frontend wiring: ${wiring.detail}` : ""}`);
     }
 
     await setBuild(buildId, { status: "publishing" });
