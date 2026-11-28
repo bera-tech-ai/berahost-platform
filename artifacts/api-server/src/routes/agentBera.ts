@@ -197,4 +197,56 @@ router.patch("/agent-bera/builds/:id/env", requireAny("write"), async (req, res)
   res.json(serialize(updated, dep ?? null, req));
 });
 
+// Redeploy an app that is already published: the same fresh clone +
+// install + restart the web-deployments Start button performs, driven
+// from the build card. No new repository is created and no new
+// deployment row — the build's existing deployment is re-cloned from
+// its repository as it stands now, so repo changes (an Agent Bera edit,
+// or a fix pushed to GitHub directly) go live with one click.
+router.post("/agent-bera/builds/:id/redeploy", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const [build] = await db.select().from(agentBuildsTable).where(and(eq(agentBuildsTable.id, id), eq(agentBuildsTable.userId, user.id)));
+  if (!build) { res.status(404).json({ error: "Build not found." }); return; }
+  if (!build.webDeploymentId) { res.status(400).json({ error: "This build has no deployment yet — there is nothing to redeploy." }); return; }
+  const entitlement = await activeUser(user.id);
+  if (!entitlement) { res.status(402).json({ error: "Your subscription is inactive. Renew to redeploy this app." }); return; }
+  await db.update(webDeploymentsTable).set({ expiresAt: entitlement.user.subscriptionExpiresAt, status: "queued", updatedAt: new Date() }).where(eq(webDeploymentsTable.id, build.webDeploymentId));
+  startWebDeployment(build.webDeploymentId).catch((err) => logger.error({ err, webDeploymentId: build.webDeploymentId }, "Agent Bera redeploy failed"));
+  const [updated] = await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, id));
+  const [dep] = await db.select({ slug: webDeploymentsTable.slug, status: webDeploymentsTable.status }).from(webDeploymentsTable).where(eq(webDeploymentsTable.id, build.webDeploymentId));
+  res.json(serialize(updated, dep ?? null, req));
+});
+
+// Retry a build that failed BEFORE anything was published (the
+// pre-publish gate stopped it — the plan guard, a syntax error the
+// repairs could not fix, a sandbox failure): the SAME build row goes
+// back through the pipeline, so repeated attempts stop piling up new
+// cards, and a repository is only ever created by the run that passes.
+// A build that already published has a repo — it is changed with Edit
+// and restarted with Redeploy, never retried. The previous attempt's
+// log is kept, with a separator line marking the new attempt;
+// runAgentBuild appends below it.
+router.post("/agent-bera/builds/:id/retry", requireAny("write"), async (req, res): Promise<void> => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const [build] = await db.select().from(agentBuildsTable).where(and(eq(agentBuildsTable.id, id), eq(agentBuildsTable.userId, user.id)));
+  if (!build) { res.status(404).json({ error: "Build not found." }); return; }
+  if (build.status !== "failed") { res.status(400).json({ error: "Only a failed build can be retried." }); return; }
+  if (build.repoUrl) { res.status(400).json({ error: "This build already published a repository — use Edit to change it or Redeploy to restart it." }); return; }
+  const entitlement = await activeUser(user.id);
+  if (!entitlement) { res.status(402).json({ error: "An active monthly subscription is required before Agent Bera can retry this build." }); return; }
+  const buildLog = `${build.buildLog ? `${build.buildLog}\n` : ""}— Retry requested —`;
+  const [updated] = await db.update(agentBuildsTable).set({
+    status: "planning",
+    error: null,
+    testResults: null,
+    liveCheck: null,
+    buildLog,
+    updatedAt: new Date()
+  }).where(eq(agentBuildsTable.id, id)).returning();
+  runAgentBuild(id).catch((err) => logger.error({ err, buildId: id }, "Agent Bera build crashed"));
+  res.status(202).json(serialize(updated, null, req));
+});
+
 export default router;

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronDown, Clock, ExternalLink, Github, Loader2, Terminal, WandSparkles } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronDown, Clock, ExternalLink, Github, Loader2, RefreshCw, RotateCcw, Terminal, WandSparkles } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -268,6 +268,76 @@ function BuildActions({ build, onDone }: { build: AgentBuild; onDone: () => void
   );
 }
 
+// Redeploy (live builds) and Retry (pre-publish failures) — the two
+// ways an existing build card moves again without creating anything
+// new. Redeploy re-clones the build's existing repository into its
+// existing deployment (the web-deployments Start machinery); Retry
+// re-runs the pipeline on the same build row, so a repository is only
+// ever created by the run that passes. A failed build that already
+// published gets neither button — it is changed with Edit and
+// restarted with Redeploy once live.
+function BuildLifecycleActions({ build, onDone }: { build: AgentBuild; onDone: () => void }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const deploymentBusy = build.deploymentStatus === "queued" || build.deploymentStatus === "building";
+  const repoShort = build.repoUrl ? build.repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\/$/, "") : "";
+
+  useEffect(() => {
+    if (note && build.deploymentStatus === "running") setNote("");
+  }, [build.deploymentStatus, note]);
+
+  const redeploy = async () => {
+    setBusy("redeploy");
+    try {
+      await apiFetch(`/api/agent-bera/builds/${build.id}/redeploy`, { method: "POST" });
+      setNote(`Redeploying — fresh clone of ${repoShort || "the repository"}`);
+      toast({ title: "Redeploy started", description: "BERAHOST is re-cloning the repository and restarting the app. No new repository is created." });
+      onDone();
+    } catch (err: any) { toast({ title: "Redeploy could not start", description: err?.error || "Try again.", variant: "destructive" }); }
+    finally { setBusy(""); }
+  };
+
+  const retry = async () => {
+    setBusy("retry");
+    try {
+      await apiFetch(`/api/agent-bera/builds/${build.id}/retry`, { method: "POST" });
+      toast({ title: "Build restarted", description: "Agent Bera is running the same build again on this card — watch the console." });
+      onDone();
+    } catch (err: any) { toast({ title: "Retry could not start", description: err?.error || "Try again.", variant: "destructive" }); }
+    finally { setBusy(""); }
+  };
+
+  if (build.status === "live" && build.webDeploymentId) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <Button size="sm" variant="outline" onClick={redeploy} disabled={busy === "redeploy" || deploymentBusy}>
+          {busy === "redeploy" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+          Redeploy
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          {note || (deploymentBusy ? `Redeploying — fresh clone of ${repoShort || "the repository"}…` : "Restarts the app from a fresh clone of its repository — no new repository is created.")}
+        </span>
+      </div>
+    );
+  }
+  if (build.status === "failed" && !build.repoUrl) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <Button size="sm" variant="outline" onClick={retry} disabled={busy === "retry"}>
+          {busy === "retry" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+          Retry build
+        </Button>
+        <span className="text-xs text-muted-foreground">Runs the same build again on this card — a repository is only created by the run that passes.</span>
+      </div>
+    );
+  }
+  if (build.status === "failed" && build.repoUrl) {
+    return <p className="border-t border-border pt-3 text-xs text-muted-foreground">Published already — use Edit or Redeploy.</p>;
+  }
+  return null;
+}
+
 export default function AgentBeraPage() {
   const { toast } = useToast();
   const [builds, setBuilds] = useState<AgentBuild[]>([]);
@@ -528,6 +598,7 @@ export default function AgentBeraPage() {
                     {b.repoUrl && <a className="inline-flex items-center gap-1 text-primary hover:underline" href={b.repoUrl} target="_blank" rel="noreferrer"><Github className="h-3.5 w-3.5" /> View code</a>}
                   </div>
                 )}
+                <BuildLifecycleActions build={b} onDone={load} />
                 {b.status === "live" && !b.parentId && <BuildActions build={b} onDone={load} />}
               </CardContent>
             </Card>
