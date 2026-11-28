@@ -368,7 +368,7 @@ export async function testProject(dir: string, files: Record<string, string>, te
     if (!retry.ok) return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() };
   }
 
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  let port = 20000 + Math.floor(Math.random() * 20000);
   let serverOut = "";
   let child: ChildProcess | null = null;
   const bootAttempt = async (): Promise<{ up: boolean; proc: ChildProcess }> => {
@@ -388,8 +388,24 @@ export async function testProject(dir: string, files: Record<string, string>, te
       // a crash (a dead process keeps its single attempt and its
       // output). One fresh spawn distinguishes a transient host/DB
       // stall from a server that genuinely cannot boot.
-      log += "\n[server] first boot attempt timed out without answering /api/health — retrying once with a fresh process\n";
-      child.kill("SIGKILL");
+      // Fix S: the retry must not reuse the stalled instance's port.
+      // BeraChat build 30 passed every endpoint test yet failed
+      // "Server boots": the first instance was alive and holding its
+      // port when the retry respawned on the SAME port, so the retry
+      // died with EADDRINUSE while instance 1 went on to serve the
+      // endpoint tests. Now the stalled process is killed and its
+      // exit awaited (briefly), and the retry binds a NEW port — the
+      // verdict, the endpoint tests' base URL and the failure tail
+      // (serverOut resets per attempt) all describe the final
+      // instance.
+      log += "\n[server] first boot attempt timed out without answering /api/health — retrying once with a fresh process on a fresh port\n";
+      const stalled = child;
+      stalled.kill("SIGKILL");
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        stalled.once("exit", () => { clearTimeout(timer); resolve(); });
+      });
+      port = 20000 + Math.floor(Math.random() * 20000);
       attempt = await bootAttempt();
       child = attempt.proc;
       up = attempt.up;

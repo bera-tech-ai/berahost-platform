@@ -1546,6 +1546,138 @@ export function ensurePlatformWiring(html: string, plan: AgentProjectPlan): stri
   return page + "\n" + script;
 }
 
+// --- Planned-route completion ----------------------------------------------
+// The frontend has the wiring layer above; the backend gets the same
+// guarantee for ABSENT routes. ChamaSave build 31 planned four
+// resources, but the generated server simply never registered the
+// enquiries routes (the plan's last resource) — POST/GET
+// /api/enquiries 404'd at the gate and three AI repair rounds could
+// not add them: a regeneration that drops a resource tends to keep
+// dropping it. So the platform completes the plan itself: every
+// planned STANDARD-CRUD endpoint with no matching registration in
+// server.js gets a canonical handler on the app's own store. This
+// fixes absence only — a route that IS registered (even a broken one)
+// is never duplicated or replaced; its correctness stays with the
+// gate and the repair loop, exactly as before.
+
+const PLANNED_ROUTES_MARKER = "// [bera-platform] canonical routes";
+
+type PlannedCrudRoute = { method: string; seg: string; kind: "create" | "list" | "get" | "update" | "remove"; label: string };
+
+// Compare routes in one canonical shape: an id segment — digits in a
+// plan path ("/api/users/1"), ":param" or "{param}" in either form —
+// normalises to ":id", so a plan path and an Express registration
+// meet in the middle.
+function normaliseRoutePath(p: string): string {
+  return String(p || "")
+    .toLowerCase()
+    .split("/")
+    .map(seg => (/^\d+$/.test(seg) || /^:[a-zA-Z]/.test(seg) || /^\{[^/]+\}$/.test(seg)) ? ":id" : seg)
+    .join("/");
+}
+
+// The standard-CRUD reading of one planned endpoint, or null for
+// anything else: extra-segment paths (/api/users/login,
+// /api/messages/ask), POST/PUT to an id path, PATCH, and health are
+// never canonical — they carry app-specific logic the platform must
+// not invent.
+function plannedCrudRoute(e: AgentEndpointTest): PlannedCrudRoute | null {
+  const method = String(e.method || "").toUpperCase();
+  const parts = String(e.path || "").toLowerCase().split("/").filter(Boolean);
+  if (parts[0] !== "api" || parts.length < 2 || parts.length > 3) return null;
+  const seg = parts[1];
+  if (seg === "health" || !/^[a-z0-9-_]+$/.test(seg)) return null;
+  if (parts.length === 2) {
+    if (method === "POST") return { method, seg, kind: "create", label: `POST /api/${seg}` };
+    if (method === "GET") return { method, seg, kind: "list", label: `GET /api/${seg}` };
+    return null;
+  }
+  const third = parts[2];
+  const idLike = /^\d+$/.test(third) || /^:[a-zA-Z]/.test(third) || /^\{[^/]+\}$/.test(third);
+  if (!idLike) return null;
+  if (method === "GET") return { method, seg, kind: "get", label: `GET /api/${seg}/:id` };
+  if (method === "PUT") return { method, seg, kind: "update", label: `PUT /api/${seg}/:id` };
+  if (method === "DELETE") return { method, seg, kind: "remove", label: `DELETE /api/${seg}/:id` };
+  return null;
+}
+
+function canonicalRouteHandler(route: PlannedCrudRoute, colVar: string): string {
+  const root = `/api/${route.seg}`;
+  const idPath = `${root}/:id`;
+  const guard = (body: string) => `async (req, res) => { try { ${body} } catch (e) { res.status(500).json({ error: 'internal error' }); } }`;
+  switch (route.kind) {
+    case "create": return `app.post('${root}', ${guard(`const row = await ${colVar}.create(req.body || {}); res.status(201).json(__beraSafeRow(row));`)})`;
+    case "list": return `app.get('${root}', ${guard(`const rows = await ${colVar}.list(); res.json(rows.map(__beraSafeRow));`)})`;
+    case "get": return `app.get('${idPath}', ${guard(`const row = await ${colVar}.get(Number(req.params.id)); if (!row) return res.status(404).json({ error: 'not found' }); res.json(__beraSafeRow(row));`)})`;
+    case "update": return `app.put('${idPath}', ${guard(`const row = await ${colVar}.update(Number(req.params.id), req.body || {}); if (!row) return res.status(404).json({ error: 'not found' }); res.json(__beraSafeRow(row));`)})`;
+    case "remove": return `app.delete('${idPath}', ${guard(`const removed = await ${colVar}.remove(Number(req.params.id)); if (!removed) return res.status(404).json({ error: 'not found' }); res.status(204).end();`)})`;
+  }
+}
+
+// Complete a generated server with canonical handlers for the planned
+// CRUD routes it never registered. Applied by the build (agentBuild)
+// at the same points as the platform wiring: after generation, on
+// every repair candidate, and throughout the edit flow. Idempotent —
+// a server already carrying the block is returned unchanged.
+export function ensurePlannedRoutes(files: Record<string, string>, plan: AgentProjectPlan): { files: Record<string, string>; added: string[] } {
+  const server = String(files?.["server.js"] || "");
+  if (!server || !plan || server.includes(PLANNED_ROUTES_MARKER)) return { files, added: [] };
+
+  const registered = new Set<string>();
+  for (const m of server.matchAll(/\b(?:app|router)\.(get|post|put|delete|patch)\(\s*(['"`])(\/[^'"`]*)\2/g)) {
+    registered.add(`${m[1].toUpperCase()} ${normaliseRoutePath(m[3])}`);
+  }
+
+  const all: AgentEndpointTest[] = [...(plan.endpoints || []), ...(plan.resources || []).flatMap(r => r.endpoints || [])];
+  const missing: PlannedCrudRoute[] = [];
+  const seen = new Set<string>();
+  for (const e of all) {
+    const route = plannedCrudRoute(e);
+    if (!route) continue;
+    const key = `${route.method} ${normaliseRoutePath(String(e.path || ""))}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!registered.has(key)) missing.push(route);
+  }
+  if (!missing.length) return { files, added: [] };
+
+  const bySeg = new Map<string, PlannedCrudRoute[]>();
+  for (const r of missing) {
+    const arr = bySeg.get(r.seg) || [];
+    arr.push(r);
+    bySeg.set(r.seg, arr);
+  }
+  const lines: string[] = [
+    "",
+    `${PLANNED_ROUTES_MARKER} — planned endpoints the generated server omitted,`,
+    "// served here with canonical handlers on the app's own store. Only",
+    "// ABSENT routes are added; registered routes are never duplicated.",
+    "const __beraSafeRow = (row) => { if (!row || typeof row !== 'object' || Array.isArray(row)) return row; const copy = { ...row }; delete copy.password; return copy; };"
+  ];
+  for (const [seg, routes] of bySeg) {
+    const colVar = `__beraCol_${seg.replace(/[^a-zA-Z0-9_$]/g, "_")}`;
+    lines.push(`const ${colVar} = store.collection('${seg.replace(/'/g, "\\'")}');`);
+    for (const r of routes) lines.push(canonicalRouteHandler(r, colVar));
+  }
+  const block = lines.join("\n") + "\n";
+
+  // Placement mirrors the wiring layer's determinism: immediately
+  // before the app's listen call (found in masked code, so a
+  // ".listen(" inside a string or comment cannot mislead the search),
+  // else before a top-level module.exports, else at the end of file.
+  const masked = maskNonCode(server);
+  const lineStartBefore = (idx: number) => server.lastIndexOf("\n", Math.max(0, idx - 1)) + 1;
+  const listenIdx = masked.lastIndexOf(".listen(");
+  let at = server.length;
+  if (listenIdx >= 0) at = lineStartBefore(listenIdx);
+  else {
+    const exportsIdx = masked.indexOf("module.exports");
+    if (exportsIdx >= 0) at = lineStartBefore(exportsIdx);
+  }
+  const next = server.slice(0, at) + block + server.slice(at);
+  return { files: { ...files, "server.js": next }, added: missing.map(r => r.label) };
+}
+
 export async function generateFrontend(promptText: string, plan: AgentProjectPlan, log?: (line: string) => void | Promise<void>): Promise<string> {
   const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
   const attempt = () => stitchCode(
