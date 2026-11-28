@@ -43,10 +43,16 @@ const textFrom = (data: any, depth = 0): string => {
 //            reviewer and the syntax repairer need fresh eyes, and
 //            same-model repairs repeated the author's mistakes.
 //   summary  publicai first: plain-language build summaries.
+//   replan   Gemini first: the compact re-plan runs only after the
+//            code seat's plan was already rejected by the plan guard,
+//            so it must not be led by the same brain that just
+//            failed — and the code seat's lead (DeepSeek) has been
+//            observed returning empty replies endpoint-wide while
+//            Gemini returns conforming compact plan JSON.
 // Within a seat the semantics are unchanged: the first non-empty reply
 // wins, and when every provider fails the same error is thrown.
 
-export type AgentSeat = "code" | "frontend" | "debug" | "summary";
+export type AgentSeat = "code" | "frontend" | "debug" | "summary" | "replan";
 
 type ChatProvider = (prompt: string, timeoutMs: number) => Promise<string>;
 
@@ -82,19 +88,31 @@ const SEAT_PROVIDERS: Record<AgentSeat, ChatProvider[]> = {
   code: [PROVIDERS.deepseek, PROVIDERS.publicai, PROVIDERS.gemini, PROVIDERS.keithai],
   frontend: [PROVIDERS.gemini, PROVIDERS.deepseek, PROVIDERS.publicai, PROVIDERS.keithai],
   debug: [PROVIDERS.qwen, PROVIDERS.gemini, PROVIDERS.deepseek, PROVIDERS.publicai],
-  summary: [PROVIDERS.publicai, PROVIDERS.keithai, PROVIDERS.gemini, PROVIDERS.deepseek]
+  summary: [PROVIDERS.publicai, PROVIDERS.keithai, PROVIDERS.gemini, PROVIDERS.deepseek],
+  replan: [PROVIDERS.gemini, PROVIDERS.publicai, PROVIDERS.deepseek, PROVIDERS.keithai]
 };
 
-export async function agentChat(prompt: string, timeoutMs = 120000, seat: AgentSeat = "code"): Promise<string> {
+// One pass over a provider chain: the first non-empty reply wins, and
+// the result reports WHICH chain position answered. The compact
+// re-plan's retry needs that position: the Casper endpoints replay
+// identical replies for identical prompts, so re-asking the provider
+// that just answered would return the same reply — a retry has to
+// continue from the NEXT provider in the chain.
+async function chatChain(prompt: string, timeoutMs: number, chain: ChatProvider[]): Promise<{ text: string; providerIndex: number }> {
   const errors: string[] = [];
-  for (const provider of SEAT_PROVIDERS[seat] || SEAT_PROVIDERS.code) {
+  for (let i = 0; i < chain.length; i++) {
     try {
-      const t = await provider(prompt, timeoutMs);
-      if (t) return t;
+      const t = await chain[i](prompt, timeoutMs);
+      if (t) return { text: t, providerIndex: i };
       errors.push("empty response");
     } catch (e: any) { errors.push(String(e?.message || e)); }
   }
   throw new Error(`The AI builder is unavailable right now (${errors.join("; ")}). Please try again in a moment.`);
+}
+
+export async function agentChat(prompt: string, timeoutMs = 120000, seat: AgentSeat = "code"): Promise<string> {
+  const { text } = await chatChain(prompt, timeoutMs, SEAT_PROVIDERS[seat] || SEAT_PROVIDERS.code);
+  return text;
 }
 
 const DESIGN_RULES = [
@@ -208,6 +226,16 @@ export const defaultExpected = (method: string): number[] =>
   method === "POST" ? [200, 201] : method === "DELETE" ? [200, 204] : [200];
 
 function sanitizeEndpoint(raw: any): AgentEndpointTest | null {
+  // Some providers answer with endpoints as bare "METHOD /path"
+  // strings instead of objects — seen live in publicai's compact
+  // re-plan replies (2026-11-28), where EVERY endpoint arrived as a
+  // string, all were dropped here, and the plan degraded to the
+  // keyword fallback. Normalise that shape instead of discarding it.
+  if (typeof raw === "string") {
+    const m = raw.trim().match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/\S+)$/i);
+    if (!m) return null;
+    raw = { method: m[1], path: m[2] };
+  }
   if (!raw || typeof raw !== "object") return null;
   const method = String(raw.method || "GET").toUpperCase();
   if (!HTTP_METHODS.includes(method)) return null;
@@ -425,37 +453,64 @@ export function assessPlanCoverage(plan: AgentProjectPlan, promptText: string): 
 // one-line summary, and per resource ONLY a name, a fields map and bare
 // endpoints (no endpoint names, no prose descriptions, no expected
 // arrays). Explicitly lists the resources the request requires.
+// Parse one compact-planner reply into a plan. Any problem — no JSON,
+// no resources, every endpoint dropped by the sanitiser — yields the
+// degraded keyword fallback, exactly as the inline code did before.
+function buildCompactPlan(raw: string, promptText: string): AgentProjectPlan {
+  const parsed = extractJsonObject(raw);
+  if (!parsed || !Array.isArray(parsed.resources) || !parsed.resources.length) return fallbackPlan(promptText);
+  const seen = new Set<string>();
+  const cleanEndpoints = (list: any): AgentEndpointTest[] => (Array.isArray(list) ? list : [])
+    .map(sanitizeEndpoint).filter(Boolean)
+    .filter((e: any) => { const k = `${(e as AgentEndpointTest).method} ${(e as AgentEndpointTest).path}`; if (seen.has(k)) return false; seen.add(k); return true; }) as AgentEndpointTest[];
+  const resources: AgentResourcePlan[] = parsed.resources.slice(0, 6).map((r: any) => ({
+    name: String(r?.name || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items",
+    endpoints: cleanEndpoints(r?.endpoints)
+  })).filter((r: AgentResourcePlan) => r.endpoints.length > 0);
+  if (!resources.length) return fallbackPlan(promptText);
+  const endpoints: AgentEndpointTest[] = [{ name: "Health check", method: "GET", path: "/api/health", expected: [200] },
+    ...resources.flatMap(r => r.endpoints).filter(e => e.path !== "/api/health")].slice(0, 21);
+  if (endpoints.length < 3) return fallbackPlan(promptText);
+  return {
+    appName: String(parsed.appName || "").replace(/\s+/g, " ").trim().slice(0, 60) || fallbackPlan(promptText).appName,
+    summary: String(parsed.summary || "").replace(/\s+/g, " ").trim().slice(0, 240),
+    resource: resources[0].name,
+    resources,
+    endpoints
+  };
+}
+
 export async function planProjectCompact(promptText: string, required: string[], envKeys: string[] = [], context?: { history?: string; externalApi?: { url: string; excerpt: string } }): Promise<AgentProjectPlan> {
   let plan: AgentProjectPlan;
   try {
-    const raw = await agentChat(
+    const prompt =
       "System: You are Agent Bera's project planner. Reply with ONLY a compact JSON object — no markdown, no commentary, no extra words. Keep the WHOLE reply as small as possible: it must fit one short message.\n" +
       "Shape: {\"appName\": string (short), \"summary\": string (ONE line), \"resources\": [{\"name\": string (one lowercase plural word), \"fields\": {\"fieldName\": \"string|number|boolean\"}, \"endpoints\": [{\"method\": \"GET|POST|PUT|PATCH|DELETE\", \"path\": \"/api/...\", \"body\": object (POST/PUT only)}]}]}\n" +
       "Rules: include EXACTLY these resources, no more, no fewer: " + required.join(", ") + ". Per resource include a list endpoint, a create endpoint whose body is a realistic sample built from its fields, and a get-one endpoint with a concrete id like /api/products/1; add update/delete endpoints where natural, and include any extra endpoint the request explicitly names (for example a login endpoint). Do NOT add endpoint \"name\" or \"expected\" fields — keep every endpoint to method, path and body only. Keep the TOTAL across all resources to at most 20 endpoints.\n" +
       (envKeys.length ? `\nThe app will run with these environment variables available (names only): ${envKeys.join(", ")}.\n` : "") +
-      "\nUser: Plan a full-stack web app for this request: " + promptText,
-      90000, "code");
-    const parsed = extractJsonObject(raw);
-    if (!parsed || !Array.isArray(parsed.resources) || !parsed.resources.length) return fallbackPlan(promptText);
-    const seen = new Set<string>();
-    const cleanEndpoints = (list: any): AgentEndpointTest[] => (Array.isArray(list) ? list : [])
-      .map(sanitizeEndpoint).filter(Boolean)
-      .filter((e: any) => { const k = `${(e as AgentEndpointTest).method} ${(e as AgentEndpointTest).path}`; if (seen.has(k)) return false; seen.add(k); return true; }) as AgentEndpointTest[];
-    const resources: AgentResourcePlan[] = parsed.resources.slice(0, 6).map((r: any) => ({
-      name: String(r?.name || "items").toLowerCase().replace(/[^a-z]/g, "").slice(0, 24) || "items",
-      endpoints: cleanEndpoints(r?.endpoints)
-    })).filter((r: AgentResourcePlan) => r.endpoints.length > 0);
-    if (!resources.length) return fallbackPlan(promptText);
-    const endpoints: AgentEndpointTest[] = [{ name: "Health check", method: "GET", path: "/api/health", expected: [200] },
-      ...resources.flatMap(r => r.endpoints).filter(e => e.path !== "/api/health")].slice(0, 21);
-    if (endpoints.length < 3) return fallbackPlan(promptText);
-    plan = {
-      appName: String(parsed.appName || "").replace(/\s+/g, " ").trim().slice(0, 60) || fallbackPlan(promptText).appName,
-      summary: String(parsed.summary || "").replace(/\s+/g, " ").trim().slice(0, 240),
-      resource: resources[0].name,
-      resources,
-      endpoints
-    };
+      "\nUser: Plan a full-stack web app for this request: " + promptText;
+    // The re-plan runs on the "replan" seat, NOT the code seat that
+    // produced the rejected first plan: a different brain leads
+    // (Gemini), because the first planner's lead provider is exactly
+    // the one whose reply just failed or fell short.
+    const chain = SEAT_PROVIDERS.replan;
+    const first = await chatChain(prompt, 90000, chain);
+    plan = buildCompactPlan(first.text, promptText);
+    if (plan.degraded && first.providerIndex + 1 < chain.length) {
+      // The provider that answered produced a reply that does not
+      // parse into a real plan (empty of usable endpoints, wrong
+      // shape). ONE more attempt, continuing the seat from the NEXT
+      // provider — the endpoints replay identical replies for
+      // identical prompts, so asking the same provider again would
+      // return the same failure. If this attempt also degrades, the
+      // degraded plan stands and the caller's plan guard remains the
+      // final honest stop.
+      try {
+        const second = await chatChain(prompt, 90000, chain.slice(first.providerIndex + 1));
+        const retryPlan = buildCompactPlan(second.text, promptText);
+        if (!retryPlan.degraded) plan = retryPlan;
+      } catch { /* keep the first attempt's degraded plan */ }
+    }
   } catch {
     return fallbackPlan(promptText);
   }

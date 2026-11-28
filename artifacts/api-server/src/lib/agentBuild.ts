@@ -385,6 +385,33 @@ export async function runAgentEdit(buildId: number): Promise<void> {
     const envKeys = Object.keys(envVars);
 
     await note(`Edit requested for ${parent.name || parent.repoFullName}: ${build.prompt}`);
+    // Throwaway database for the edit's gates (Fix P): the edit row
+    // inherits the parent's env, whose DATABASE_URL is the LIVE app's
+    // database — so the gate's endpoint tests used to run against
+    // production data, and their DELETE tests removed real seed rows
+    // (build 13's schema lost id 1 from users and products; edit
+    // build 23 then failed the id routes with 404 on both servers).
+    // When the parent has a built-in DB, provision a scratch one for
+    // THIS edit build and point every gate run below (initial, repair
+    // loop, server-preservation fallback, post-deploy verification)
+    // at it instead. The deployment's own env is never touched — only
+    // this local envVars copy used for testProject calls.
+    if ((parent as any).builtinDb) {
+      const scratch = await provisionBuiltinDb(buildId).catch(() => null);
+      if (scratch?.connectionString) {
+        envVars.DATABASE_URL = scratch.connectionString;
+        await setBuild(buildId, { envVars });
+        await note("Edit checks are running against a throwaway database, so the live app's data is untouched.");
+      } else if (envVars.DATABASE_URL && envVars.DATABASE_URL.includes(`agent_app_${buildId}`)) {
+        // A previous run of this same edit already provisioned its
+        // throwaway database and persisted the string on this row —
+        // provisioning is one-shot (a repeat call returns null), and
+        // the gates are still pointed at the scratch DB.
+        await note("Edit checks are running against a throwaway database, so the live app's data is untouched.");
+      } else {
+        await note("A throwaway database could not be provisioned for this edit, so its checks are running against the app's live database.");
+      }
+    }
     const serverFile = await getRepositoryFile(token, parent.repoFullName, "server.js");
     const frontFile = await getRepositoryFile(token, parent.repoFullName, "public/index.html");
     const pkgFile = await getRepositoryFile(token, parent.repoFullName, "package.json").catch(() => null);
