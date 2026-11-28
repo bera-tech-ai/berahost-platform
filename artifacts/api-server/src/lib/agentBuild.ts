@@ -5,7 +5,7 @@ import path from "path";
 import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspace/db";
 import { eq, desc, isNull, ne, and } from "drizzle-orm";
 import { createGithubRepositoryWithRetry, createRepositoryFile, getRepositoryFile, upsertRepositoryFile, decryptGithubToken, githubRepoUrl } from "./github";
-import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, repairFrontend, editProjectFiles, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
+import { planProject, planProjectCompact, assessPlanCoverage, generateProjectFiles, repairBackendServer, repairSyntaxWindow, syntaxErrorLine, repairFrontend, editProjectFiles, ensurePlatformWiring, GENERATED_STORE, slugify, type AgentProjectPlan } from "./agentAi";
 import { writeProjectFiles, testProject, runLiveCheck, type TestReport, type LiveCheckReport } from "./agentTest";
 import { provisionBuiltinDb } from "./agentDb";
 import { exploreExternalApi, type ExploredApi } from "./agentExplore";
@@ -208,6 +208,12 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     await setBuild(buildId, { status: "generating" });
     const base = slugify(plan.appName || build.prompt.split(/\s+/).slice(0, 5).join(" "));
     const files = await generateProjectFiles(build.prompt, plan, base, envKeys, note);
+    // Fix M: the platform injects its guaranteed wiring layer into
+    // the page before the first gate — the model's page keeps its
+    // design, but the data layer no longer depends on the model
+    // remembering to write it. Idempotent; re-applied before every
+    // gate below so a repair that replaces the page cannot lose it.
+    files["public/index.html"] = ensurePlatformWiring(files["public/index.html"], plan);
     await note(`Generated ${Object.keys(files).length} files: ${Object.keys(files).join(", ")}`);
 
     // 3. Test in a sandbox — nothing publishes unless this passes
@@ -261,6 +267,9 @@ export async function runAgentBuild(buildId: number): Promise<void> {
         await note(`Repair round ${round}: fixing the failing checks in the backend`);
         candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
       }
+      // Fix M: whichever file the repair replaced, the page that
+      // reaches the gate carries the platform wiring layer.
+      if (candidate) candidate["public/index.html"] = ensurePlatformWiring(candidate["public/index.html"], plan);
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
       report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
@@ -384,6 +393,11 @@ export async function runAgentEdit(buildId: number): Promise<void> {
       "lib/store.js": GENERATED_STORE,
       "public/index.html": edited.frontend
     };
+    // Fix M: the edited page gets the platform wiring layer before
+    // its gate, exactly like a fresh build. (The `changed` check
+    // below compares `edited` against the originals, so injection
+    // alone never counts as the user's edit.)
+    files["public/index.html"] = ensurePlatformWiring(files["public/index.html"], plan);
     const changed = [
       ...(edited.server !== serverFile.content ? ["server.js"] : []),
       ...(edited.frontend !== frontFile.content ? ["public/index.html"] : [])
@@ -417,6 +431,7 @@ export async function runAgentEdit(buildId: number): Promise<void> {
         await note(`Repair round ${round}: fixing the failing checks in the edited backend`);
         candidate = { ...bestFiles, "server.js": await repairBackendServer(build.prompt, plan, bestFiles["server.js"], failureSummary(bestReport), envKeys) };
       }
+      if (candidate) candidate["public/index.html"] = ensurePlatformWiring(candidate["public/index.html"], plan);
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
       report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
@@ -440,6 +455,9 @@ export async function runAgentEdit(buildId: number): Promise<void> {
       const frontendChanged = files["public/index.html"] !== frontFile.content;
       if (backendGrounds && frontendChanged) {
         const fallbackFiles: Record<string, string> = { ...files, "server.js": serverFile.content };
+        // Fix M composes with the fallback: whichever server the set
+        // carries, its page is the wired one.
+        fallbackFiles["public/index.html"] = ensurePlatformWiring(fallbackFiles["public/index.html"], plan);
         await writeProjectFiles(tmpDir, { "server.js": fallbackFiles["server.js"], "public/index.html": fallbackFiles["public/index.html"] });
         const fallbackReport = await testProject(tmpDir, fallbackFiles, plan.endpoints, envVars, plan);
         if (fallbackReport.ok) {
