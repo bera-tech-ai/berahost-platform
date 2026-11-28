@@ -14,7 +14,7 @@ import { logger } from "./logger";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-gbyspbc3.manus.space";
 function publicUrlFor(slug: string) {
   const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;

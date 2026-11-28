@@ -3,14 +3,14 @@ import { db, agentBuildsTable, usersTable, webDeploymentsTable } from "@workspac
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { requireAny } from "../middlewares/requireAuth";
 import { getPlan, isSubscriptionActive } from "../lib/subscriptions";
-import { decryptGithubToken } from "../lib/github";
+import { decryptGithubToken, withRequestOrigin } from "../lib/github";
 import { runAgentBuild, runAgentEdit } from "../lib/agentBuild";
 import { assertPublicUrl } from "../lib/agentExplore";
 import { startWebDeployment } from "../lib/webProcess";
 import { logger } from "../lib/logger";
 
 const router = Router();
-const MANAGED_PUBLIC_URL = "https://berahost-cywge4uc.manus.space";
+const MANAGED_PUBLIC_URL = "https://berahost-gbyspbc3.manus.space";
 function publicUrl(slug: string) {
   const base = (process.env.PUBLIC_URL || process.env.FRONTEND_URL || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}` : "") || MANAGED_PUBLIC_URL).replace(/\/$/, "");
   return `${base}/web/${slug}`;
@@ -25,10 +25,16 @@ async function activeUser(userId: number) {
   return isSubscriptionActive(user) ? { user, plan: getPlan(user.subscriptionPlan) } : null;
 }
 
-function serialize(build: any, deployment?: { slug: string; status: string } | null) {
+function serialize(build: any, deployment?: { slug: string; status: string } | null, req?: { protocol: string; get(name: string): string | undefined }) {
   // A build whose deployment has come up is live, even if the build's own
   // wait loop timed out before it saw the deployment running.
   const live = Boolean(deployment && deployment.status === "running");
+  // URLs are rebased onto the requesting host at read time: the public
+  // origin changes across redeploys, and previously minted URLs (and the
+  // live check's stored URL) would otherwise point at a dead host.
+  const liveCheck = build.liveCheck && typeof build.liveCheck === "object"
+    ? { ...build.liveCheck, url: withRequestOrigin(build.liveCheck.url, req) }
+    : build.liveCheck ?? null;
   return {
     id: build.id,
     prompt: build.prompt,
@@ -40,7 +46,7 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     // stay server-side (sandbox tests + the deployment's env).
     envVarKeys: build.envVars && typeof build.envVars === "object" ? Object.keys(build.envVars) : [],
     testResults: build.testResults ?? null,
-    liveCheck: build.liveCheck ?? null,
+    liveCheck,
     buildLog: build.buildLog ?? null,
     parentId: build.parentId ?? null,
     builtinDb: Boolean(build.builtinDb),
@@ -49,7 +55,7 @@ function serialize(build: any, deployment?: { slug: string; status: string } | n
     repoFullName: build.repoFullName,
     webDeploymentId: build.webDeploymentId,
     deploymentStatus: deployment?.status ?? null,
-    publicUrl: deployment ? publicUrl(deployment.slug) : null,
+    publicUrl: deployment ? withRequestOrigin(publicUrl(deployment.slug), req) : null,
     createdAt: build.createdAt?.toISOString?.() ?? build.createdAt,
     updatedAt: build.updatedAt?.toISOString?.() ?? null
   };
@@ -66,7 +72,7 @@ router.get("/agent-bera/builds", requireAny("read"), async (req, res): Promise<v
   const user = (req as any).user;
   const builds = await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.userId, user.id)).orderBy(desc(agentBuildsTable.createdAt));
   const deps = await deploymentsById(builds.map(b => b.webDeploymentId).filter((x): x is number => typeof x === "number"));
-  res.json(builds.map(b => serialize(b, b.webDeploymentId ? deps.get(b.webDeploymentId) : null)));
+  res.json(builds.map(b => serialize(b, b.webDeploymentId ? deps.get(b.webDeploymentId) : null, req)));
 });
 
 // Shared env-var validation: an object of KEY: value pairs, names like
@@ -125,7 +131,7 @@ router.post("/agent-bera/builds", requireAny("write"), async (req, res): Promise
   const name = prompt.replace(/\s+/g, " ").slice(0, 60);
   const [build] = await db.insert(agentBuildsTable).values({ userId: user.id, prompt, name, status: "planning", envVars, builtinDb, apiUrl } as any).returning();
   runAgentBuild(build.id).catch((err) => logger.error({ err, buildId: build.id }, "Agent Bera build crashed"));
-  res.status(202).json(serialize(build, null));
+  res.status(202).json(serialize(build, null, req));
 });
 
 // Edit an existing live app in place. The edit is its own build row
@@ -161,7 +167,7 @@ router.post("/agent-bera/builds/:id/edit", requireAny("write"), async (req, res)
     webDeploymentId: root.webDeploymentId
   }).returning();
   runAgentEdit(edit.id).catch((err) => logger.error({ err, buildId: edit.id }, "Agent Bera edit crashed"));
-  res.status(202).json(serialize(edit, null));
+  res.status(202).json(serialize(edit, null, req));
 });
 
 // Replace a live app's environment variables and restart it with the new
@@ -188,7 +194,7 @@ router.patch("/agent-bera/builds/:id/env", requireAny("write"), async (req, res)
   startWebDeployment(root.webDeploymentId).catch((err) => logger.error({ err, webDeploymentId: root.webDeploymentId }, "Agent Bera env-change restart failed"));
   const [updated] = await db.select().from(agentBuildsTable).where(eq(agentBuildsTable.id, root.id));
   const [dep] = await db.select({ slug: webDeploymentsTable.slug, status: webDeploymentsTable.status }).from(webDeploymentsTable).where(eq(webDeploymentsTable.id, root.webDeploymentId));
-  res.json(serialize(updated, dep ?? null));
+  res.json(serialize(updated, dep ?? null, req));
 });
 
 export default router;
