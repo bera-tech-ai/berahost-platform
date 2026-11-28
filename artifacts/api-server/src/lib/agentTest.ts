@@ -398,11 +398,77 @@ export async function testProject(dir: string, files: Record<string, string>, te
     if (!up) { log += "\n[server]\n" + tail(serverOut, 2000); return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() }; }
 
     const responseBodies: { label: string; body: string }[] = [];
-    for (const t of tests) {
+    const base = `http://127.0.0.1:${port}`;
+    // Id-capture endpoint testing (Fix P): the plan writes id routes
+    // with a literal id ("/api/users/1"), but a gate that runs against
+    // an app's LIVE database — an edit gate inheriting the parent's
+    // DATABASE_URL, or the post-deploy verification gate — cannot
+    // assume row 1 exists: earlier gates' DELETE tests remove it
+    // (build 13's live schema lost id 1 from users and products that
+    // way, and edit build 23 then failed GET/PUT/DELETE /api/users/1
+    // with 404 on BOTH servers). So per resource, capture a real id
+    // before the id tests run: first choice, POST the plan's create
+    // sample and take the created row's id (the DELETE test then
+    // removes the test's own row — self-cleaning); second choice, the
+    // first row's id from the list endpoint; last resort, the plan's
+    // literal id, exactly as before.
+    const idPathMatch = (p: string) => String(p || "").match(/^(\/api\/[a-z0-9-_]+)\/(\d+|:[a-zA-Z]+|\{[^/]+\})$/i);
+    const idFromJson = (v: any): string | undefined => {
+      if (!v || typeof v !== "object") return undefined;
+      if (Array.isArray(v)) return v.length ? idFromJson(v[0]) : undefined;
+      const raw = (v as any).id;
+      if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+      if (typeof raw === "string" && raw.length) return raw;
+      for (const k of ["data", "item", "result"]) {
+        const got = idFromJson((v as any)[k]);
+        if (got !== undefined) return got;
+      }
+      return undefined;
+    };
+    const capturedId = new Map<string, string>();
+    {
+      const roots = new Set<string>();
+      for (const t of tests) {
+        const m = idPathMatch(t.path);
+        if (m) roots.add(m[1]);
+      }
+      for (const root of roots) {
+        let id: string | undefined;
+        const create = tests.find(t => String(t.method).toUpperCase() === "POST" && String(t.path) === root);
+        if (create) {
+          try {
+            const r = await fetch(`${base}${root}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(create.body || {}),
+              signal: AbortSignal.timeout(10000)
+            });
+            const text = await r.text().catch(() => "");
+            if (r.status >= 200 && r.status < 300) { try { id = idFromJson(JSON.parse(text)); } catch { /* not JSON — fall through to the list */ } }
+          } catch { /* create unavailable — fall through to the list */ }
+        }
+        if (id === undefined) {
+          try {
+            const r = await fetch(`${base}${root}`, { signal: AbortSignal.timeout(10000) });
+            const text = await r.text().catch(() => "");
+            try {
+              const parsed = JSON.parse(text);
+              const arr = Array.isArray(parsed) ? parsed : Object.values(parsed || {}).find(v => Array.isArray(v));
+              if (arr) id = idFromJson(arr);
+            } catch { /* not JSON — keep the literal id */ }
+          } catch { /* list unavailable — keep the literal id */ }
+        }
+        if (id !== undefined) capturedId.set(root, id);
+      }
+    }
+    const runEndpointTest = async (t: AgentEndpointTest, effectivePath: string): Promise<void> => {
       const expected = t.expected && t.expected.length ? t.expected : [200];
+      const label = t.name
+        ? (t.name.includes(t.path) ? t.name.split(t.path).join(effectivePath) : t.name)
+        : `${t.method} ${effectivePath}`;
       try {
         const hasBody = ["POST", "PUT", "PATCH"].includes(t.method);
-        const r = await fetch(`http://127.0.0.1:${port}${t.path}`, {
+        const r = await fetch(`${base}${effectivePath}`, {
           method: t.method,
           headers: hasBody ? { "Content-Type": "application/json" } : undefined,
           body: hasBody ? JSON.stringify(t.body || {}) : undefined,
@@ -411,13 +477,32 @@ export async function testProject(dir: string, files: Record<string, string>, te
         // Bodies are captured for the Auth hygiene probe below; the
         // status verdicts above them are unchanged.
         const bodyText = await r.text().catch(() => "");
-        responseBodies.push({ label: t.name || `${t.method} ${t.path}`, body: bodyText });
+        responseBodies.push({ label, body: bodyText });
         const ok = expected.includes(r.status);
-        results.push({ name: t.name || `${t.method} ${t.path}`, ok, status: r.status, detail: ok ? `${t.method} ${t.path} -> ${r.status}` : `${t.method} ${t.path} -> ${r.status}, expected ${expected.join("/")}` });
+        results.push({ name: label, ok, status: r.status, detail: ok ? `${t.method} ${effectivePath} -> ${r.status}` : `${t.method} ${effectivePath} -> ${r.status}, expected ${expected.join("/")}` });
       } catch (e: any) {
-        results.push({ name: t.name || `${t.method} ${t.path}`, ok: false, detail: `${t.method} ${t.path} -> ${String(e?.message || e)}` });
+        results.push({ name: label, ok: false, detail: `${t.method} ${effectivePath} -> ${String(e?.message || e)}` });
       }
+    };
+    // DELETE tests against a captured id run LAST for their resource:
+    // they remove the row the other id tests are reading and updating
+    // (and, for a captured id, the test's own row).
+    const deferredDeletes: { t: AgentEndpointTest; path: string }[] = [];
+    for (const t of tests) {
+      const m = idPathMatch(t.path);
+      let effectivePath = t.path;
+      let captured = false;
+      if (m && capturedId.has(m[1])) {
+        effectivePath = `${m[1]}/${capturedId.get(m[1])}`;
+        captured = true;
+      }
+      if (captured && String(t.method).toUpperCase() === "DELETE") {
+        deferredDeletes.push({ t, path: effectivePath });
+        continue;
+      }
+      await runEndpointTest(t, effectivePath);
     }
+    for (const d of deferredDeletes) await runEndpointTest(d.t, d.path);
     // Auth hygiene: a generated register endpoint once shipped echoing
     // the created user INCLUDING its plaintext password (build 13) —
     // and its list/get-one endpoints returned every stored password.
