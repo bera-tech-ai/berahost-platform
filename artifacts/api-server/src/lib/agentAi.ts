@@ -524,6 +524,7 @@ const BACKEND_RULES = [
   "- Implement every API endpoint in the plan exactly as specified using the store: list = await store.list(); get-one = await store.get(Number(req.params.id)) (null -> 404 JSON); create = await store.create(body) (answer 201); update = await store.update(Number(req.params.id), body) (null -> 404); remove = await store.remove(Number(req.params.id)) (true -> 204, false -> 404).",
   "- Register specific routes (e.g. /api/products/low-stock) BEFORE parameterised routes (e.g. /api/products/:id), or Express will swallow them.",
   "- POST create endpoints validate the body, assign the next numeric id, and answer 201 with the created item as JSON.",
+  "- AUTH HYGIENE: NEVER include the password field in any API response. Register, login, list, get-one and update responses must strip it before sending (const { password, ...safe } = user; res.json(safe); — and map list items the same way). Passwords are stored only so login can check them; a response that echoes a password fails verification.",
   "- Unknown /api/* routes answer 404 JSON. Add a JSON error handler. Never crash on bad input.",
   "- Listen on process.env.PORT || 3000 and log a startup line.",
   "- Declare every top-level name (app, PORT, pool, stores) exactly ONCE — a duplicated const declaration is a syntax error that fails the build.",
@@ -546,7 +547,11 @@ let pool = null;
 async function db() {
   if (!pool) {
     const { Pool } = require('pg');
-    pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Boot must never block on the database: a stalled connection
+    // attempt gets 5s and a stalled query 15s before pg gives up, and
+    // init() additionally races its work against a 10s budget (below),
+    // falling back to memory exactly like a connection error.
+    pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000, query_timeout: 15000 });
   }
   return pool;
 }
@@ -559,24 +564,37 @@ function makeCollection(name) {
   let dbReady = false;
   let memory = [];
   let nextId = 1;
+  async function initFromDb(seeds) {
+    const p = await db();
+    await p.query('CREATE TABLE IF NOT EXISTS ' + table + ' (id SERIAL PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT now())');
+    const found = await p.query('SELECT COUNT(*)::int AS n FROM ' + table);
+    if (found.rows[0].n === 0) {
+      for (let i = 0; i < seeds.length; i++) {
+        await p.query('INSERT INTO ' + table + ' (id, data) VALUES ($1, $2)', [i + 1, JSON.stringify(seeds[i])]);
+      }
+      if (seeds.length) await p.query("SELECT setval(pg_get_serial_sequence('" + table + "', 'id'), (SELECT MAX(id) FROM " + table + "))");
+    }
+  }
   async function init(seedItems) {
     const seeds = Array.isArray(seedItems) ? seedItems : [];
     if (process.env.DATABASE_URL) {
+      let timer = null;
       try {
-        const p = await db();
-        await p.query('CREATE TABLE IF NOT EXISTS ' + table + ' (id SERIAL PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT now())');
-        const found = await p.query('SELECT COUNT(*)::int AS n FROM ' + table);
-        if (found.rows[0].n === 0) {
-          for (let i = 0; i < seeds.length; i++) {
-            await p.query('INSERT INTO ' + table + ' (id, data) VALUES ($1, $2)', [i + 1, JSON.stringify(seeds[i])]);
-          }
-          if (seeds.length) await p.query("SELECT setval(pg_get_serial_sequence('" + table + "', 'id'), (SELECT MAX(id) FROM " + table + "))");
-        }
+        // Race the database work against a 10s budget: a database
+        // that accepts the connection but never answers must not
+        // hang boot — the timeout lands in the same catch as a
+        // connection error and the collection runs from memory.
+        await Promise.race([
+          initFromDb(seeds),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('database init timed out after 10s')), 10000); })
+        ]);
         dbReady = true;
         return;
       } catch (e) {
         console.error('[store] database unavailable for ' + table + ', using memory instead:', e.message);
         dbReady = false;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     memory = seeds.map((item, i) => ({ id: i + 1, ...item }));

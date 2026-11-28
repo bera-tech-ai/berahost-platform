@@ -220,7 +220,12 @@ export async function runAgentBuild(buildId: number): Promise<void> {
     await setBuild(buildId, { status: "testing" });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bera-"));
     await writeProjectFiles(tmpDir, files);
-    let report = await testProject(tmpDir, files, plan.endpoints, envVars, plan);
+    // Fresh-build gates run the Auth hygiene probe STRICT: a brand-new
+    // server that echoes a password must not publish. (Edit gates in
+    // runAgentEdit deliberately call testProject without the flag —
+    // there the probe is a non-failing warning, so a pre-existing echo
+    // in a published server cannot fail a page-only edit.)
+    let report = await testProject(tmpDir, files, plan.endpoints, envVars, plan, { strictAuthHygiene: true });
     await setBuild(buildId, { testResults: report });
     await note(`Endpoint tests: ${report.results.filter(r => r.ok).length}/${report.results.length} checks passed`);
     // Repair loop: always repair from the BEST version seen so far, and
@@ -271,7 +276,7 @@ export async function runAgentBuild(buildId: number): Promise<void> {
       // reaches the gate carries the platform wiring layer.
       if (candidate) candidate["public/index.html"] = ensurePlatformWiring(candidate["public/index.html"], plan);
       await writeProjectFiles(tmpDir, { "server.js": candidate["server.js"], "public/index.html": candidate["public/index.html"] });
-      report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan);
+      report = await testProject(tmpDir, candidate, plan.endpoints, envVars, plan, { strictAuthHygiene: true });
       await note(`Endpoint tests after repair ${round}: ${score(report)}/${report.results.length} checks passed`);
       if (score(report) > score(bestReport)) { bestFiles = candidate; bestReport = report; }
       await setBuild(buildId, { testResults: bestReport });
@@ -454,6 +459,8 @@ export async function runAgentEdit(buildId: number): Promise<void> {
       const backendGrounds = report.results.some(r => !r.ok && (r.name === "Syntax: server.js" || r.name === "Server boots" || endpointNames.has(r.name)));
       const frontendChanged = files["public/index.html"] !== frontFile.content;
       if (backendGrounds && frontendChanged) {
+        const failingNames = report.results.filter(r => !r.ok).map(r => r.name).join(", ");
+        await note(`The edited backend failed its checks (${failingNames}). Re-checking the gate with the original server kept and only the page changed…`);
         const fallbackFiles: Record<string, string> = { ...files, "server.js": serverFile.content };
         // Fix M composes with the fallback: whichever server the set
         // carries, its page is the wired one.
@@ -465,6 +472,9 @@ export async function runAgentEdit(buildId: number): Promise<void> {
           Object.assign(files, fallbackFiles);
           report = fallbackReport;
           await setBuild(buildId, { testResults: report });
+        } else {
+          const fallbackFailing = fallbackReport.results.filter(r => !r.ok).map(r => r.name).join(", ");
+          await note(`The original-server re-check also failed (${fallbackFailing}), so the edit was not applied.`);
         }
       }
     }

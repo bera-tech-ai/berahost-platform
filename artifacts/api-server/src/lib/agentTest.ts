@@ -291,7 +291,7 @@ export function frontendWiringCheck(files: Record<string, string>, plan: AgentPr
   return { name, ok: true, detail: `page calls every required endpoint with relative paths (${required.map(reqText).join(", ")})` };
 }
 
-export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[], env: Record<string, string> = {}, plan?: AgentProjectPlan): Promise<TestReport> {
+export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[], env: Record<string, string> = {}, plan?: AgentProjectPlan, opts?: { strictAuthHygiene?: boolean }): Promise<TestReport> {
   const results: CheckResult[] = [];
   let log = "";
   const envKeys = Object.keys(env);
@@ -370,14 +370,34 @@ export async function testProject(dir: string, files: Record<string, string>, te
 
   const port = 20000 + Math.floor(Math.random() * 20000);
   let serverOut = "";
-  const child = spawn(process.execPath, ["server.js"], { cwd: dir, env: { ...process.env, ...env, PORT: String(port), NODE_ENV: "test" }, stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
-  child.stderr?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
+  let child: ChildProcess | null = null;
+  const bootAttempt = async (): Promise<{ up: boolean; proc: ChildProcess }> => {
+    serverOut = "";
+    const c = spawn(process.execPath, ["server.js"], { cwd: dir, env: { ...process.env, ...env, PORT: String(port), NODE_ENV: "test" }, stdio: ["ignore", "pipe", "pipe"] });
+    c.stdout?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
+    c.stderr?.on("data", (d) => { serverOut = (serverOut + d.toString()).slice(-50000); });
+    const up = await waitForServer(port, c);
+    return { up, proc: c };
+  };
   try {
-    const up = await waitForServer(port, child);
+    let attempt = await bootAttempt();
+    child = attempt.proc;
+    let up = attempt.up;
+    if (!up && child.exitCode === null) {
+      // The process is alive but never answered health — a stall, not
+      // a crash (a dead process keeps its single attempt and its
+      // output). One fresh spawn distinguishes a transient host/DB
+      // stall from a server that genuinely cannot boot.
+      log += "\n[server] first boot attempt timed out without answering /api/health — retrying once with a fresh process\n";
+      child.kill("SIGKILL");
+      attempt = await bootAttempt();
+      child = attempt.proc;
+      up = attempt.up;
+    }
     results.push({ name: "Server boots", ok: up, detail: up ? `listening on port ${port}` : `server did not answer /api/health in time — output: ${tail(serverOut, 300)}` });
     if (!up) { log += "\n[server]\n" + tail(serverOut, 2000); return { ok: false, results, log: tail(log), testedAt: new Date().toISOString() }; }
 
+    const responseBodies: { label: string; body: string }[] = [];
     for (const t of tests) {
       const expected = t.expected && t.expected.length ? t.expected : [200];
       try {
@@ -388,14 +408,47 @@ export async function testProject(dir: string, files: Record<string, string>, te
           body: hasBody ? JSON.stringify(t.body || {}) : undefined,
           signal: AbortSignal.timeout(10000)
         });
+        // Bodies are captured for the Auth hygiene probe below; the
+        // status verdicts above them are unchanged.
+        const bodyText = await r.text().catch(() => "");
+        responseBodies.push({ label: t.name || `${t.method} ${t.path}`, body: bodyText });
         const ok = expected.includes(r.status);
         results.push({ name: t.name || `${t.method} ${t.path}`, ok, status: r.status, detail: ok ? `${t.method} ${t.path} -> ${r.status}` : `${t.method} ${t.path} -> ${r.status}, expected ${expected.join("/")}` });
       } catch (e: any) {
         results.push({ name: t.name || `${t.method} ${t.path}`, ok: false, detail: `${t.method} ${t.path} -> ${String(e?.message || e)}` });
       }
     }
+    // Auth hygiene: a generated register endpoint once shipped echoing
+    // the created user INCLUDING its plaintext password (build 13) —
+    // and its list/get-one endpoints returned every stored password.
+    // When the plan exercises a register-style POST with a sample
+    // password, no endpoint response may contain that password value.
+    // STRICT (fresh builds): a failing check — the repair loop gets a
+    // precise target. Edit gates (default): a non-failing warning, so
+    // a pre-existing echo in a published server can never fail a
+    // page-only edit or its server-preservation fallback.
+    const registerTests = tests.filter(t => {
+      if (String(t.method).toUpperCase() !== "POST") return false;
+      const pw = (t.body as any)?.password;
+      if (typeof pw !== "string" || pw.length < 4) return false;
+      const p = String(t.path || "");
+      const n = String(t.name || "");
+      return /register|sign[-_ ]?up/i.test(p) || /register|sign[-_ ]?up/i.test(n) || /^\/api\/(users?|accounts?|members?|auth)\/?$/i.test(p);
+    });
+    if (registerTests.length) {
+      const passwords = [...new Set(registerTests.map(t => String((t.body as any).password)))];
+      const offenders = responseBodies.filter(rb => passwords.some(pw => rb.body.includes(pw))).map(rb => rb.label);
+      if (offenders.length) {
+        const what = `the response(s) to ${offenders.join(", ")} contain the plaintext password submitted at registration — strip the password field from every response (register, login, list, get-one, update)`;
+        results.push(opts?.strictAuthHygiene
+          ? { name: "Auth hygiene", ok: false, detail: what }
+          : { name: "Auth hygiene", ok: true, detail: `warning: ${what} (pre-existing in the published server — not failing this gate)` });
+      } else {
+        results.push({ name: "Auth hygiene", ok: true, detail: "no endpoint response contains the password submitted at registration" });
+      }
+    }
   } finally {
-    child.kill("SIGKILL");
+    child?.kill("SIGKILL");
   }
   log += "\n[server]\n" + tail(serverOut, 1500);
   return { ok: results.every(r => r.ok), results, log: tail(log), testedAt: new Date().toISOString() };
