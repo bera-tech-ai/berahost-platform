@@ -18,7 +18,7 @@ import { builtinModules } from "module";
 import fs from "fs/promises";
 import path from "path";
 import { undeclaredSeedNames } from "./agentAi";
-import type { AgentEndpointTest } from "./agentAi";
+import type { AgentEndpointTest, AgentProjectPlan } from "./agentAi";
 
 export type CheckResult = { name: string; ok: boolean; detail: string; status?: number };
 export type TestReport = { ok: boolean; results: CheckResult[]; log: string; testedAt: string };
@@ -159,7 +159,102 @@ export function routeChecks(files: Record<string, string>, tests: AgentEndpointT
   return out;
 }
 
-export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[], env: Record<string, string> = {}): Promise<TestReport> {
+// --- Frontend wiring -------------------------------------------------------
+// The backend gate can pass 26/26 while the page never calls the API
+// at all — build 13 shipped exactly that: a static brochure with zero
+// fetch calls, a decorative Login link, a health badge stuck on
+// "checking…" and an alert-only contact form. This check is purely
+// static (no boot): it extracts the API targets the page actually
+// calls and requires every load-bearing planned endpoint — each
+// resource's list + create, and every auth endpoint — to be called
+// through a relative path. Absolute '/api/…' paths are a fault of
+// their own: apps serve under a /web/<slug> base path, so they hit
+// the platform's API, not the app's.
+
+const AUTH_ENDPOINT_RE = /login|register|auth|sign[-_ ]?(in|up)/i;
+
+type RequiredCall = { method: string; path: string };
+
+function requiredFrontendCalls(plan: AgentProjectPlan): RequiredCall[] {
+  const required: RequiredCall[] = [];
+  const seen = new Set<string>();
+  const add = (method: string, path: string) => {
+    const p = String(path || "").toLowerCase();
+    if (!p.startsWith("/api/") || p === "/api/health") return;
+    const k = `${method.toUpperCase()} ${p}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    required.push({ method: method.toUpperCase(), path: p });
+  };
+  const all: AgentEndpointTest[] = [...(plan.endpoints || []), ...(plan.resources || []).flatMap(r => r.endpoints || [])];
+  const roots = new Set<string>((plan.resources || []).map(r => `/api/${String(r.name || "").toLowerCase()}`).filter(p => p !== "/api/"));
+  if (!roots.size) {
+    for (const e of plan.endpoints || []) {
+      const m = String(e.path || "").toLowerCase().match(/^\/api\/([a-z0-9-]+)/);
+      if (m && m[1] !== "health") roots.add(`/api/${m[1]}`);
+    }
+  }
+  for (const e of all) {
+    const p = String(e.path || "").toLowerCase();
+    const method = String(e.method || "GET").toUpperCase();
+    if (AUTH_ENDPOINT_RE.test(p) || (e.name && AUTH_ENDPOINT_RE.test(e.name))) add(method, p);
+    if (roots.has(p) && (method === "GET" || method === "POST")) add(method, p);
+  }
+  return required;
+}
+
+type ExtractedCall = { raw: string; absolute: boolean; segments: string[] };
+
+function extractApiCalls(html: string): ExtractedCall[] {
+  const calls: ExtractedCall[] = [];
+  const push = (raw: string) => {
+    const t = String(raw || "").trim();
+    if (!t) return;
+    const absolute = t.startsWith("/api/") || t === "/api";
+    const cleaned = t.split(/[?#]/)[0].replace(/^\.\//, "").replace(/^\/+/, "");
+    if (cleaned.toLowerCase() !== "api" && !cleaned.toLowerCase().startsWith("api/")) return;
+    // Template interpolations and :params stand for a concrete id.
+    const segments = cleaned.split("/").filter(s => s.length > 0)
+      .map(s => (s.includes("${") || s.startsWith(":") ? ":id" : s.toLowerCase()));
+    calls.push({ raw: t, absolute, segments });
+  };
+  for (const m of html.matchAll(/fetch\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) push(m[2]);
+  for (const m of html.matchAll(/\.open\(\s*(['"])[A-Za-z]+\1\s*,\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g)) push(m[3]);
+  return calls;
+}
+
+// Segment-wise match: 'api/users' matches the list/create root,
+// 'api/users/3' (or 'api/users/${id}') matches a get-one style path
+// whose id segment the plan writes as a concrete number.
+function callMatches(segments: string[], requiredPath: string): boolean {
+  const req = requiredPath.split("/").filter(Boolean)
+    .map(s => (/^\d+$/.test(s) || s.startsWith(":") || (s.startsWith("{") && s.endsWith("}")) ? ":id" : s.toLowerCase()));
+  if (segments.length !== req.length) return false;
+  return req.every((seg, i) => seg === segments[i] || (seg === ":id" && (segments[i] === ":id" || /^\d+$/.test(segments[i]))));
+}
+
+export function frontendWiringCheck(files: Record<string, string>, plan: AgentProjectPlan): CheckResult {
+  const name = "Frontend wiring";
+  const html = String(files["public/index.html"] || "");
+  const required = requiredFrontendCalls(plan);
+  const reqText = (r: RequiredCall) => `${r.method} ${r.path.slice(1)}`;
+  if (!html) return { name, ok: false, detail: "the project has no public/index.html — there is no page to wire to the API" };
+  const calls = extractApiCalls(html);
+  if (!calls.length) {
+    return { name, ok: false, detail: `page makes no API calls — it is a static page, not an app; it never calls the endpoints the backend implements (required: ${required.map(reqText).join(", ") || "none"})` };
+  }
+  const problems: string[] = [];
+  for (const c of calls) {
+    if (c.absolute) problems.push(`absolute API path '${c.raw}' breaks under the app's base path; use relative '${c.raw.slice(1)}'`);
+  }
+  for (const r of required) {
+    if (!calls.some(c => callMatches(c.segments, r.path))) problems.push(`page never calls ${reqText(r)}`);
+  }
+  if (problems.length) return { name, ok: false, detail: problems.join("; ") };
+  return { name, ok: true, detail: `page calls every required endpoint with relative paths (${required.map(reqText).join(", ")})` };
+}
+
+export async function testProject(dir: string, files: Record<string, string>, tests: AgentEndpointTest[], env: Record<string, string> = {}, plan?: AgentProjectPlan): Promise<TestReport> {
   const results: CheckResult[] = [];
   let log = "";
   const envKeys = Object.keys(env);
@@ -196,6 +291,11 @@ export async function testProject(dir: string, files: Record<string, string>, te
       ? "every SEED array the code uses is declared"
       : `server.js uses ${undeclaredSeeds.join(", ")} without declaring ${undeclaredSeeds.length === 1 ? "it" : "them"} — declare each as a const array of at least 3 seed items near the top of the file`
   });
+  // Frontend wiring: the page must actually call the planned API —
+  // a brochure with a green backend is a failed build, not a demo to
+  // ship (build 13). Static, so it runs in every gate (fresh builds,
+  // edits, post-deploy repair verification) whenever a plan is known.
+  if (plan) results.push(frontendWiringCheck(files, plan));
   results.push(...await syntaxChecks(dir, files));
   if (results.some(r => !r.ok)) return { ok: false, results, log, testedAt: new Date().toISOString() };
 
