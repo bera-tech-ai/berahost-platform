@@ -31,19 +31,65 @@ const textFrom = (data: any, depth = 0): string => {
   return "";
 };
 
-export async function agentChat(prompt: string, timeoutMs = 120000): Promise<string> {
-  const providers: Array<(q: string) => string> = [
-    q => "https://apiz.xcasper.space/api/ai/deepseek?model=v4-flash&query=" + encodeURIComponent(q),
-    q => "https://apiz.xcasper.space/api/ai/publicai-chat?message=" + encodeURIComponent(q),
-    q => "https://apiz.xcasper.space/api/ai/gemini?query=" + encodeURIComponent(q),
-    q => "https://apiz.xcasper.space/api/ai/keithai?prompt=" + encodeURIComponent(q)
-  ];
+// --- Provider seats ---------------------------------------------------------
+// The Casper endpoints are no longer one failover chain doing every job
+// with whichever model answers first. Each SEAT — a role in the build —
+// has its own chain, because the models have different strengths and a
+// model must never be the only checker of its own work:
+//   code     DeepSeek first: the proven planner and backend coder.
+//   frontend Gemini first: page design and long HTML output are its
+//            strength — the seat DeepSeek kept failing (Fix K/M).
+//   debug    Qwen first: a DIFFERENT brain than the author — the
+//            reviewer and the syntax repairer need fresh eyes, and
+//            same-model repairs repeated the author's mistakes.
+//   summary  publicai first: plain-language build summaries.
+// Within a seat the semantics are unchanged: the first non-empty reply
+// wins, and when every provider fails the same error is thrown.
+
+export type AgentSeat = "code" | "frontend" | "debug" | "summary";
+
+type ChatProvider = (prompt: string, timeoutMs: number) => Promise<string>;
+
+async function fetchJson(url: string, timeoutMs: number, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<any> {
+  const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  return r.json().catch(() => null);
+}
+
+const getProvider = (makeUrl: (q: string) => string): ChatProvider =>
+  async (prompt, timeoutMs) => textFrom(await fetchJson(makeUrl(prompt), timeoutMs));
+
+// Qwen answers a text-only POST {query} with {data:{reply}} — terse,
+// and structurally separate from the GET chat endpoints.
+const qwenProvider: ChatProvider = async (prompt, timeoutMs) => {
+  const j: any = await fetchJson("https://apiz.xcasper.space/api/ai/qwen", timeoutMs, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: prompt })
+  });
+  const reply = typeof j?.data?.reply === "string" ? j.data.reply.trim() : "";
+  return reply || textFrom(j);
+};
+
+const PROVIDERS: Record<string, ChatProvider> = {
+  deepseek: getProvider(q => "https://apiz.xcasper.space/api/ai/deepseek?model=v4-flash&query=" + encodeURIComponent(q)),
+  publicai: getProvider(q => "https://apiz.xcasper.space/api/ai/publicai-chat?message=" + encodeURIComponent(q)),
+  gemini: getProvider(q => "https://apiz.xcasper.space/api/ai/gemini?query=" + encodeURIComponent(q)),
+  keithai: getProvider(q => "https://apiz.xcasper.space/api/ai/keithai?prompt=" + encodeURIComponent(q)),
+  qwen: qwenProvider
+};
+
+const SEAT_PROVIDERS: Record<AgentSeat, ChatProvider[]> = {
+  code: [PROVIDERS.deepseek, PROVIDERS.publicai, PROVIDERS.gemini, PROVIDERS.keithai],
+  frontend: [PROVIDERS.gemini, PROVIDERS.deepseek, PROVIDERS.publicai, PROVIDERS.keithai],
+  debug: [PROVIDERS.qwen, PROVIDERS.gemini, PROVIDERS.deepseek, PROVIDERS.publicai],
+  summary: [PROVIDERS.publicai, PROVIDERS.keithai, PROVIDERS.gemini, PROVIDERS.deepseek]
+};
+
+export async function agentChat(prompt: string, timeoutMs = 120000, seat: AgentSeat = "code"): Promise<string> {
   const errors: string[] = [];
-  for (const make of providers) {
+  for (const provider of SEAT_PROVIDERS[seat] || SEAT_PROVIDERS.code) {
     try {
-      const r = await fetch(make(prompt), { signal: AbortSignal.timeout(timeoutMs) });
-      const j: any = await r.json().catch(() => null);
-      const t = textFrom(j);
+      const t = await provider(prompt, timeoutMs);
       if (t) return t;
       errors.push("empty response");
     } catch (e: any) { errors.push(String(e?.message || e)); }
@@ -231,7 +277,7 @@ async function planProjectInner(promptText: string, envKeys: string[] = [], cont
       (context?.history ? `\nThis user has built these apps before:\n${context.history}\nIf the new request refers to one of them ("like my coffee app", "similar to the gym one"), mirror that app's resources and structure, adapted to the new request.\n` : "") +
       (context?.externalApi ? `\nThe user wants this app built against an EXTERNAL API at ${context.externalApi.url} (available to the backend as the EXTERNAL_API_URL environment variable). The platform fetched that URL before planning; here is what it returned:\n---\n${context.externalApi.excerpt}\n---\nPlan this app's OWN /api endpoints so the backend can proxy and shape that external data for the frontend (the frontend only ever calls this app's own endpoints). Keep the same endpoint discipline: list, create where natural, get-one with a concrete id — for proxied data, get-one may map to the external API's own id.\n` : "") +
       "\nUser: Plan a full-stack web app for this request: " + promptText,
-      90000);
+      90000, "code");
     const parsed = extractJsonObject(raw);
     if (!parsed) return fallbackPlan(promptText);
     const seen = new Set<string>();
@@ -388,7 +434,7 @@ export async function planProjectCompact(promptText: string, required: string[],
       "Rules: include EXACTLY these resources, no more, no fewer: " + required.join(", ") + ". Per resource include a list endpoint, a create endpoint whose body is a realistic sample built from its fields, and a get-one endpoint with a concrete id like /api/products/1; add update/delete endpoints where natural, and include any extra endpoint the request explicitly names (for example a login endpoint). Do NOT add endpoint \"name\" or \"expected\" fields — keep every endpoint to method, path and body only. Keep the TOTAL across all resources to at most 20 endpoints.\n" +
       (envKeys.length ? `\nThe app will run with these environment variables available (names only): ${envKeys.join(", ")}.\n` : "") +
       "\nUser: Plan a full-stack web app for this request: " + promptText,
-      90000);
+      90000, "code");
     const parsed = extractJsonObject(raw);
     if (!parsed || !Array.isArray(parsed.resources) || !parsed.resources.length) return fallbackPlan(promptText);
     const seen = new Set<string>();
@@ -431,20 +477,22 @@ function trimOverlap(existing: string, cont: string): string {
 // Continue an existing partial file: ask for continuations and stitch
 // them on until `isComplete` says the file is finished (the chat
 // endpoints truncate long replies, so a file rarely arrives whole).
-async function continueStitching(code: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds: number): Promise<string> {
+// Continuations stay in the seat that started the file — a frontend
+// Gemini began is continued by the frontend chain, not by DeepSeek.
+async function continueStitching(code: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds: number, seat: AgentSeat = "code"): Promise<string> {
   let out = code;
   for (let i = 0; i < maxRounds && !isComplete(out); i++) {
     const tail = out.slice(-1500);
     let cont = stripAnyFences(await agentChat(
       `System: You are continuing a single ${fileLabel} file you were writing. Output ONLY the continuation of the code — no markdown fences, no explanations, do NOT restart the file and do NOT repeat anything already written. Do NOT redeclare any variable, function or constant that already exists earlier in the file. Finish the whole file completely.\n\nUser: The file so far ends with this exact text:\n...\n${tail}\n\nContinue exactly from where that text stops.`,
-      150000));
+      150000, seat));
     if (!cont) {
       // A single empty reply from the provider is usually transient —
       // wait and ask once more before giving up on the file.
       await new Promise(r => setTimeout(r, 3000));
       cont = stripAnyFences(await agentChat(
         `System: You are continuing a single ${fileLabel} file you were writing. Output ONLY the continuation of the code — no markdown fences, no explanations, do NOT restart the file. Finish the whole file completely.\n\nUser: The file so far ends with this exact text:\n...\n${tail}\n\nContinue exactly from where that text stops.`,
-        150000));
+        150000, seat));
       if (!cont) break;
     }
     out += trimOverlap(out, cont);
@@ -454,9 +502,9 @@ async function continueStitching(code: string, fileLabel: string, isComplete: (c
 
 // Generate one code file, stitching continuations until `isComplete` says
 // the file is finished (the chat endpoints truncate long replies).
-async function stitchCode(firstPrompt: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds = 5): Promise<string> {
-  const first = stripAnyFences(await agentChat(firstPrompt, 150000));
-  return continueStitching(first, fileLabel, isComplete, maxRounds);
+async function stitchCode(firstPrompt: string, fileLabel: string, isComplete: (code: string) => boolean, maxRounds = 5, seat: AgentSeat = "code"): Promise<string> {
+  const first = stripAnyFences(await agentChat(firstPrompt, 150000, seat));
+  return continueStitching(first, fileLabel, isComplete, maxRounds, seat);
 }
 
 const BACKEND_RULES = [
@@ -856,7 +904,7 @@ export async function generateBackendServer(promptText: string, plan: AgentProje
   let code = await stitchCode(
     "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? `\n\nEXTERNAL API: this app integrates with ${plan.externalApi.url}, available as process.env.EXTERNAL_API_URL. Call it SERVER-SIDE with fetch (e.g. to list or fetch the external data behind this app's own endpoints), shaping the response for the frontend. What that URL returned when the platform explored it:\n---\n${plan.externalApi.excerpt}\n---\nIf an external call fails at runtime, answer 502 with a JSON error — never crash. Data the user creates in THIS app still goes through the provided store.` : "") + "\n\nEndpoints to implement:\n" + endpointList,
     "server.js",
-    (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
+    (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500, 5, "code");
   code = stripProseAroundCode(normalizeServerCode(code, plan));
   if (!code.includes("express") || !code.includes("/api/health")) {
     throw new Error("The generated backend was incomplete, so nothing was published. Please try again.");
@@ -868,7 +916,7 @@ export async function generateBackendServer(promptText: string, plan: AgentProje
       const retry = stripProseAroundCode(normalizeServerCode(await stitchCode(
         "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + "\n\nEndpoints to implement:\n" + endpointList + "\n\nIMPORTANT: the previous attempt was syntactically invalid JavaScript. Write clean, simple, valid code. Output ONLY code.",
         "server.js",
-        (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500), plan));
+        (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500, 5, "code"), plan));
       if ((await jsParses(retry)) && retry.includes("/api/health")) code = retry;
     } catch { /* keep the first attempt; the sandbox gate decides */ }
   }
@@ -890,7 +938,7 @@ export async function repairBackendServer(promptText: string, plan: AgentProject
     "System: " + backendRules(envKeys) + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText +
     "\n\nEndpoints to implement:\n" + endpointList + instruction,
     "server.js",
-    (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
+    (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500, 5, "code");
   code = stripProseAroundCode(normalizeServerCode(code, plan));
   if (!code.includes("express") || !code.includes("/api/health")) {
     throw new Error("The repaired backend was still incomplete.");
@@ -937,7 +985,7 @@ export async function repairSyntaxWindow(plan: AgentProjectPlan, code: string, s
     raw = await agentChat(
       "System: You are fixing ONE JavaScript syntax error in a Node.js/Express server file. The syntax checker reported this error:\n" + String(syntaxDetail).slice(0, 700) +
       `\n\nBelow are lines ${start}-${end} of the file (of ${lines.length} total), each prefixed with its line number. Return ONLY the corrected replacement lines for lines ${start}-${end}: no line numbers, no markdown fences, no explanations, no commentary. Preserve the window's behaviour and content — change only what the syntax error requires (remove a stray closing token, close an open block, fix a bracket). Do not add new endpoints or rename anything.\n\n` + numbered,
-      90000);
+      90000, "debug");
   } catch { return null; }
   let replyLines = stripAnyFences(raw).split("\n");
   // Tolerate an AI that echoes the line numbers back: strip the
@@ -973,6 +1021,7 @@ const FRONTEND_RULES = [
   "- EVERY form on the page MUST submit to its planned backend endpoint with fetch() and show the real result. Placeholder handlers are FORBIDDEN: no alert-only submit handlers, no fake success messages, no simulated data — if a form exists, it posts to the API.",
   "- On load, check GET /api/health and show a small 'API online/offline' status indicator.",
   "- The health indicator MUST settle: when the health fetch resolves it shows 'API online', when it fails it shows 'API offline' — never leave a permanent 'checking…' label on the page.",
+  "- PLATFORM WIRING HOOKS: the platform injects a script that binds this page to the API — give it hooks to bind to: a <div data-bera-list=\"<segment>\"></div> where each resource's items should render (segment = the resource's API segment, e.g. data-bera-list=\"products\"), a <form data-bera-form=\"<segment>\"> for each resource's create form (data-bera-form=\"register\" on the registration form, data-bera-form=\"login\" on the login form), an element with data-bera-health for the API status, and an element with data-bera-auth-status for the signed-in state. The platform fills those containers, submits those forms to the API and settles the health badge — write your own fetch calls as the rules above require; the hooks are the guaranteed floor underneath them.",
   "- Modern, professional design that fits the business: strong typography (Google Fonts CDN allowed), real copy (never lorem ipsum), a committed colour theme.",
   "- Mobile-friendly: <meta name=\"viewport\"> and responsive CSS with media queries.",
   "- The file MUST be complete: end with </body></html>."
@@ -996,13 +1045,429 @@ export function normalizeFrontendHtml(html: string): string {
   return String(html || "").replace(/(['"`])\/api\//g, "$1api/");
 }
 
+// --- Platform wiring injection (Fix M) ---------------------------------------
+// Fixes K and L made the gate catch unwired pages and normalised the
+// model's absolute-path dialect, but the wiring itself was still the
+// model's job — and on multi-resource apps it kept not doing it:
+// brochure pages (build 13), helper-hidden calls (edit 18), a static
+// page twice in a row (ChamaSave, build 19). Fix M takes the job away
+// from the model. The platform KNOWS the plan, so it injects a
+// guaranteed data layer into every generated page: literal relative
+// fetch calls for every endpoint the wiring gate requires, list
+// rendering, create-form wiring, auth wiring and a health badge that
+// always settles. The model keeps only what it is good at — design,
+// layout, copy. The script binds to the hooks FRONTEND_RULES ask for
+// (data-bera-list / data-bera-form / data-bera-health /
+// data-bera-auth-status), falls back to elements the page already has,
+// and where nothing matches appends plain functional sections — so the
+// app works even when the generated page is a pure brochure.
+// Idempotent: a page already carrying the layer is returned unchanged.
+
+const WIRING_AUTH_RE = /login|register|auth|sign[-_ ]?(in|up)/i;
+
+type WiringField = { name: string; type: string; numeric: boolean };
+
+function wiringIdent(seg: string): string {
+  const clean = String(seg || "").replace(/[^a-zA-Z0-9_$]/g, "_");
+  return /^[a-zA-Z_$]/.test(clean) ? clean : `r_${clean}`;
+}
+
+// Fallback-form input shape for one plan field: the brief's type rules
+// (password / email / number for amount|price|total, else text), plus
+// numeric coercion when the plan's own sample body carries a number.
+function wiringField(name: string, sample: any): WiringField {
+  const n = name.toLowerCase();
+  const type = /password/.test(n) ? "password" : /email/.test(n) ? "email" : /amount|price|total/.test(n) ? "number" : "text";
+  return { name, type, numeric: typeof sample === "number" };
+}
+
+// A resource's fields, from the plan: the create endpoint's sample
+// body keys (the same source the seed guarantee uses — the plan type
+// carries no separate fields list). The id key is the store's, not a
+// form field.
+function wiringFields(resource: AgentResourcePlan): WiringField[] {
+  const eps = resource.endpoints || [];
+  const withBody = eps.filter(e => e.body && typeof e.body === "object" && Object.keys(e.body).length > 0);
+  const body = (withBody.find(e => String(e.method).toUpperCase() === "POST") || withBody[0])?.body as Record<string, any> | undefined;
+  if (!body) return [];
+  return Object.keys(body)
+    .filter(k => k.toLowerCase() !== "id" && /^[A-Za-z0-9_ -]+$/.test(k))
+    .slice(0, 10)
+    .map(k => wiringField(k, body[k]));
+}
+
+// The endpoints the wiring gate (agentTest.frontendWiringCheck) will
+// require of the page — mirrored here so the injected layer covers
+// them BY CONSTRUCTION: per resource its list + create, plus every
+// auth-shaped endpoint (matched by path or by endpoint name).
+function wiringRequiredEndpoints(plan: AgentProjectPlan): { method: string; path: string }[] {
+  const required: { method: string; path: string }[] = [];
+  const seen = new Set<string>();
+  const add = (method: string, path: string) => {
+    const p = String(path || "").toLowerCase();
+    if (!p.startsWith("/api/") || p === "/api/health") return;
+    const k = `${method.toUpperCase()} ${p}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    required.push({ method: method.toUpperCase(), path: p });
+  };
+  const all: AgentEndpointTest[] = [...(plan.endpoints || []), ...(plan.resources || []).flatMap(r => r.endpoints || [])];
+  const roots = new Set<string>((plan.resources || []).map(r => `/api/${String(r.name || "").toLowerCase()}`).filter(p => p !== "/api/"));
+  if (!roots.size) {
+    for (const e of plan.endpoints || []) {
+      const m = String(e.path || "").toLowerCase().match(/^\/api\/([a-z0-9-]+)/);
+      if (m && m[1] !== "health") roots.add(`/api/${m[1]}`);
+    }
+  }
+  for (const e of all) {
+    const p = String(e.path || "").toLowerCase();
+    const method = String(e.method || "GET").toUpperCase();
+    if (WIRING_AUTH_RE.test(p) || (e.name && WIRING_AUTH_RE.test(e.name))) add(method, p);
+    if (roots.has(p) && (method === "GET" || method === "POST")) add(method, p);
+  }
+  return required;
+}
+
+// The runtime half of the injected layer: static vanilla JS, bound to
+// the generated endpoint functions and the BERA_WIRING config the
+// builder emits above it. Every feature is defensive — a missing
+// element degrades silently, except the guaranteed fallbacks (lists,
+// create forms, auth forms) which are appended to the body when the
+// page offers nothing to bind to. Written without template literals
+// so it can live inside this file's template string unchanged.
+const PLATFORM_WIRING_RUNTIME = `
+function beraEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function beraItems(j) { if (Array.isArray(j)) return j; if (j && Array.isArray(j.items)) return j.items; if (j && Array.isArray(j.data)) return j.data; if (j && typeof j === 'object') return [j]; return []; }
+function beraMeta(el) { return String((el && el.id) || '') + ' ' + String((el && el.className) || ''); }
+function beraFindList(seg) {
+  var el = document.querySelector('[data-bera-list="' + seg + '"]');
+  if (el) return el;
+  el = document.getElementById(seg + '-list') || document.getElementById(seg);
+  if (el) return el;
+  try { el = document.querySelector('.' + seg + '-list'); } catch (e) { el = null; }
+  if (el) return el;
+  var tables = document.querySelectorAll('table');
+  for (var i = 0; i < tables.length; i++) {
+    if (beraMeta(tables[i]).toLowerCase().indexOf(seg) >= 0) { var tb = tables[i].querySelector('tbody'); if (tb) return tb; }
+  }
+  var tbs = document.querySelectorAll('tbody');
+  for (var j = 0; j < tbs.length; j++) {
+    var p = tbs[j].parentElement;
+    while (p && p !== document.body) { if (beraMeta(p).toLowerCase().indexOf(seg) >= 0) return tbs[j]; p = p.parentElement; }
+  }
+  return null;
+}
+function beraSection(seg, title) {
+  var s = document.querySelector('section[data-bera-auto="' + seg + '"]');
+  if (s) return s;
+  s = document.createElement('section');
+  s.setAttribute('data-bera-auto', seg);
+  s.innerHTML = '<h2>' + beraEsc(title) + '</h2><div data-bera-host="1"></div>';
+  document.body.appendChild(s);
+  return s;
+}
+function beraRender(res) {
+  var loader = BERA_LOADERS[res.seg];
+  if (!loader) return;
+  loader().then(function (j) {
+    var items = beraItems(j);
+    var host = beraFindList(res.seg);
+    if (!host) host = beraSection(res.seg, res.title).querySelector('[data-bera-host]');
+    if (!host) return;
+    var fields = res.fields.map(function (f) { return f.name; });
+    if (!fields.length && items.length) fields = Object.keys(items[0] || {});
+    if (host.tagName === 'TBODY') {
+      host.innerHTML = items.map(function (it) { return '<tr>' + fields.map(function (f) { return '<td>' + beraEsc(it ? it[f] : '') + '</td>'; }).join('') + '</tr>'; }).join('');
+    } else {
+      host.innerHTML = items.length ? items.map(function (it) { return '<div class="bera-item">' + fields.map(function (f) { return '<div><strong>' + beraEsc(f) + ':</strong> ' + beraEsc(it ? it[f] : '') + '</div>'; }).join('') + '</div>'; }).join('') : '<p>No items yet.</p>';
+    }
+  }).catch(function () {});
+}
+function beraFormValues(form, res) {
+  var data = {};
+  var numeric = {};
+  if (res) res.fields.forEach(function (f) { if (f.numeric) numeric[f.name] = true; });
+  var fd = new FormData(form);
+  fd.forEach(function (v, k) { if (typeof v === 'string') data[k] = (numeric[k] && v !== '' && !isNaN(Number(v))) ? Number(v) : v; });
+  return data;
+}
+function beraSay(form, msg, ok) {
+  var el = form.querySelector('[data-bera-status]');
+  if (!el && form.parentElement) {
+    var near = form.parentElement.querySelector('[data-bera-status]');
+    if (near && !near.closest('form')) el = near;
+  }
+  if (!el) { el = document.createElement('p'); el.setAttribute('data-bera-status', '1'); form.appendChild(el); }
+  el.textContent = msg;
+  el.style.color = ok ? 'green' : 'red';
+}
+function beraFindCreateForm(res) {
+  var f = document.querySelector('form[data-bera-form="' + res.seg + '"]') || document.getElementById(res.seg + '-form');
+  if (f) return f;
+  var forms = document.querySelectorAll('form');
+  for (var i = 0; i < forms.length; i++) {
+    var meta = (beraMeta(forms[i]) + ' ' + String(forms[i].getAttribute('action') || '')).toLowerCase();
+    if (meta.indexOf(res.seg) >= 0) return forms[i];
+  }
+  return null;
+}
+function beraBuildForm(res) {
+  var form = document.createElement('form');
+  form.setAttribute('data-bera-form', res.seg);
+  form.innerHTML = res.fields.map(function (f) { return '<label>' + beraEsc(f.name) + ' <input name="' + beraEsc(f.name) + '" type="' + f.type + '"></label> '; }).join('') + '<button type="submit">Save</button>';
+  return form;
+}
+function beraWireCreate(res, form) {
+  var create = BERA_CREATORS[res.seg];
+  if (!create || !form || form.getAttribute('data-bera-wired')) return;
+  form.setAttribute('data-bera-wired', '1');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    create(beraFormValues(form, res)).then(function () { beraSay(form, 'Saved', true); try { form.reset(); } catch (e) {} beraRender(res); })
+      .catch(function (err) { beraSay(form, String((err && err.message) || err || 'Save failed'), false); });
+  });
+}
+function beraFormMentions(form, re) {
+  var meta = (beraMeta(form) + ' ' + String(form.getAttribute('action') || '')).toLowerCase();
+  return re.test(meta);
+}
+function beraHasPassword(form) { return !!form.querySelector('input[type="password"]'); }
+function beraFindRegisterForm() {
+  var f = document.querySelector('form[data-bera-form="register"]') || document.getElementById('register-form') || document.getElementById('registerForm');
+  if (f) return f;
+  var forms = document.querySelectorAll('form');
+  for (var i = 0; i < forms.length; i++) { if (beraFormMentions(forms[i], /register|sign[-_ ]?up/) && beraHasPassword(forms[i])) return forms[i]; }
+  return null;
+}
+function beraFindLoginForm(registerForm) {
+  var f = document.querySelector('form[data-bera-form="login"]') || document.getElementById('login-form') || document.getElementById('loginForm');
+  if (f && f !== registerForm) return f;
+  var forms = document.querySelectorAll('form');
+  var i;
+  for (i = 0; i < forms.length; i++) { if (forms[i] !== registerForm && beraHasPassword(forms[i]) && beraFormMentions(forms[i], /login|sign[-_ ]?in/)) return forms[i]; }
+  for (i = 0; i < forms.length; i++) { if (forms[i] !== registerForm && beraHasPassword(forms[i])) return forms[i]; }
+  return null;
+}
+function beraAuthValues(form) {
+  var data = beraFormValues(form, null);
+  if (data.email === undefined || data.password === undefined) {
+    var inputs = form.querySelectorAll('input');
+    for (var i = 0; i < inputs.length; i++) {
+      var type = String(inputs[i].getAttribute('type') || 'text').toLowerCase();
+      var hint = (String(inputs[i].name || '') + ' ' + String(inputs[i].id || '')).toLowerCase();
+      if (type === 'password' && data.password === undefined) data.password = inputs[i].value;
+      else if ((type === 'email' || /email|user/.test(hint)) && data.email === undefined) data.email = inputs[i].value;
+    }
+  }
+  return data;
+}
+function beraWireLogin(form) {
+  if (!beraLoginCall || !form || form.getAttribute('data-bera-wired')) return;
+  form.setAttribute('data-bera-wired', '1');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var data = beraAuthValues(form);
+    beraLoginCall(data).then(function (j) {
+      var user = (j && j.user) || j || {};
+      try { localStorage.setItem('beraUser', JSON.stringify(user)); } catch (e) {}
+      var who = user.email || data.email || user.name || '';
+      var els = document.querySelectorAll('[data-bera-auth-status], #auth-status');
+      for (var i = 0; i < els.length; i++) els[i].textContent = 'Signed in as ' + who;
+      beraSay(form, 'Signed in as ' + who, true);
+    }).catch(function (err) { beraSay(form, String((err && err.message) || err || 'Login failed'), false); });
+  });
+}
+function beraWireRegister(form, res) {
+  if (!beraRegisterCall || !form || form.getAttribute('data-bera-wired')) return;
+  form.setAttribute('data-bera-wired', '1');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    beraRegisterCall(beraFormValues(form, res)).then(function () { beraSay(form, 'Registered', true); try { form.reset(); } catch (e) {} if (res) beraRender(res); })
+      .catch(function (err) { beraSay(form, String((err && err.message) || err || 'Registration failed'), false); });
+  });
+}
+function beraSetHealth(ok) {
+  var els = document.querySelectorAll('[data-bera-health], #health, .health-badge, #health-status');
+  for (var i = 0; i < els.length; i++) els[i].textContent = ok ? 'Online' : 'Offline';
+}
+function beraInitHealth() {
+  if (!BERA_WIRING.health || !beraHealthCall) return;
+  beraHealthCall().then(function () { beraSetHealth(true); }).catch(function () { beraSetHealth(false); });
+}
+function beraInitLists() {
+  BERA_WIRING.resources.forEach(function (res) { if (res.hasList) beraRender(res); });
+}
+function beraInitForms() {
+  var registerForm = BERA_WIRING.auth.register ? beraFindRegisterForm() : null;
+  BERA_WIRING.resources.forEach(function (res) {
+    if (!res.hasCreate) return;
+    var form = beraFindCreateForm(res);
+    if (form && registerForm && form === registerForm) form = null;
+    if (!form) {
+      if (BERA_WIRING.auth.registerSeg === res.seg) return;
+      form = beraBuildForm(res);
+      beraSection(res.seg, res.title).appendChild(form);
+    }
+    beraWireCreate(res, form);
+  });
+}
+function beraInitAuth() {
+  var need = BERA_WIRING.auth;
+  if (!need.login && !need.register) return;
+  var usersRes = null;
+  BERA_WIRING.resources.forEach(function (r) { if (r.seg === need.registerSeg) usersRes = r; });
+  var registerForm = need.register ? beraFindRegisterForm() : null;
+  var loginForm = need.login ? beraFindLoginForm(registerForm) : null;
+  if ((need.register && !registerForm) || (need.login && !loginForm)) {
+    var sec = document.querySelector('section[data-bera-auto="auth"]');
+    if (!sec) { sec = document.createElement('section'); sec.setAttribute('data-bera-auto', 'auth'); sec.innerHTML = '<h2>Account</h2>'; document.body.appendChild(sec); }
+    if (need.register && !registerForm) {
+      registerForm = beraBuildForm(usersRes || { seg: 'register', title: 'Register', fields: [{ name: 'name', type: 'text', numeric: false }, { name: 'email', type: 'email', numeric: false }, { name: 'password', type: 'password', numeric: false }] });
+      registerForm.setAttribute('data-bera-form', 'register');
+      sec.appendChild(registerForm);
+    }
+    if (need.login && !loginForm) {
+      loginForm = document.createElement('form');
+      loginForm.setAttribute('data-bera-form', 'login');
+      loginForm.innerHTML = '<label>email <input name="email" type="email"></label> <label>password <input name="password" type="password"></label> <button type="submit">Login</button>';
+      sec.appendChild(loginForm);
+    }
+  }
+  if (registerForm && need.register) beraWireRegister(registerForm, usersRes);
+  if (loginForm && need.login) beraWireLogin(loginForm);
+}
+function beraInit() {
+  try { beraInitHealth(); } catch (e) {}
+  try { beraInitLists(); } catch (e) {}
+  try { beraInitForms(); } catch (e) {}
+  try { beraInitAuth(); } catch (e) {}
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', beraInit); else beraInit();
+`;
+
+// Build the injected <script> block for a plan, or "" when the plan
+// has nothing to wire. The endpoint functions carry the LITERAL
+// relative fetch calls the wiring gate scans for — one per resource
+// list/create, one for login, one for register, plus any other
+// gate-required auth endpoint — and the runtime behaviour is wired
+// through those same functions, never through a second hidden path.
+function platformWiringScript(plan: AgentProjectPlan): string {
+  const resources = plan.resources || [];
+  const all: AgentEndpointTest[] = [...(plan.endpoints || []), ...resources.flatMap(r => r.endpoints || [])];
+  const rel = (p: string) => String(p || "").replace(/^\/+/, "").replace(/'/g, "\\'");
+  const hasHealth = all.some(e => String(e.path || "").toLowerCase() === "/api/health");
+
+  type ResInfo = { seg: string; ident: string; title: string; list?: AgentEndpointTest; create?: AgentEndpointTest; fields: WiringField[] };
+  const seenSegs = new Set<string>();
+  const resInfos: ResInfo[] = [];
+  for (const r of resources) {
+    const seg = String(r.name || "").toLowerCase();
+    if (!seg || seenSegs.has(seg)) continue;
+    seenSegs.add(seg);
+    const root = `/api/${seg}`;
+    const eps = r.endpoints || [];
+    resInfos.push({
+      seg,
+      ident: wiringIdent(seg),
+      title: seg.charAt(0).toUpperCase() + seg.slice(1),
+      list: eps.find(e => String(e.method).toUpperCase() === "GET" && String(e.path).toLowerCase() === root),
+      create: eps.find(e => String(e.method).toUpperCase() === "POST" && String(e.path).toLowerCase() === root),
+      fields: wiringFields(r)
+    });
+  }
+
+  const loginEp = all.find(e => /login/i.test(String(e.path)) && String(e.method).toUpperCase() === "POST")
+    || all.find(e => /login/i.test(String(e.path)));
+  const usersRes = resInfos.find(r => r.seg === "users" && r.create);
+  const registerEp = usersRes?.create
+    || all.find(e => /register|sign[-_ ]?up/i.test(String(e.path)) && String(e.method).toUpperCase() === "POST")
+    || all.find(e => /register|sign[-_ ]?up/i.test(String(e.path)));
+  const registerSeg = usersRes ? "users" : null;
+
+  // Any remaining gate-required endpoint (an auth-shaped path the
+  // resource/login/register functions do not already cover) gets its
+  // own literal-call function, so coverage holds by construction.
+  const covered = new Set<string>();
+  const cover = (e?: AgentEndpointTest) => { if (e) covered.add(`${String(e.method).toUpperCase()} ${String(e.path).toLowerCase()}`); };
+  resInfos.forEach(r => { cover(r.list); cover(r.create); });
+  cover(loginEp);
+  cover(registerEp);
+  const extraAuth: AgentEndpointTest[] = [];
+  for (const req of wiringRequiredEndpoints(plan)) {
+    if (covered.has(`${req.method} ${req.path}`)) continue;
+    const ep = all.find(e => String(e.method).toUpperCase() === req.method && String(e.path).toLowerCase() === req.path);
+    if (ep) { extraAuth.push(ep); covered.add(`${req.method} ${req.path}`); }
+  }
+
+  const config = {
+    health: hasHealth,
+    resources: resInfos.map(r => ({ seg: r.seg, title: r.title, fields: r.fields, hasList: !!r.list, hasCreate: !!r.create })),
+    auth: { login: !!loginEp, register: !!registerEp, registerSeg }
+  };
+  if (!config.resources.length && !config.auth.login && !config.auth.register && !config.health) return "";
+
+  const getFn = (name: string, relative: string) =>
+    `function ${name}() { return fetch('${relative}').then(function (r) { return r.json().catch(function () { return null; }); }); }`;
+  const sendFn = (name: string, method: string, relative: string) =>
+    `function ${name}(data) { return fetch('${relative}', { method: '${method}', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}) }).then(function (r) { return r.json().catch(function () { return null; }).then(function (j) { if (!r.ok) { throw new Error((j && (j.error || j.message)) || ('Request failed (' + r.status + ')')); } return j; }); }); }`;
+  const bodyMethod = (e: AgentEndpointTest) => {
+    const m = String(e.method).toUpperCase();
+    return ["POST", "PUT", "PATCH"].includes(m) ? m : "POST";
+  };
+
+  const fns: string[] = [];
+  if (hasHealth) fns.push(`function beraHealth() { return fetch('api/health').then(function (r) { if (!r.ok) { throw new Error('offline'); } return r.json().catch(function () { return null; }); }); }`);
+  for (const r of resInfos) {
+    if (r.list) fns.push(getFn(`beraLoad_${r.ident}`, rel(r.list.path)));
+    if (r.create) fns.push(sendFn(`beraCreate_${r.ident}`, "POST", rel(r.create.path)));
+  }
+  if (loginEp) fns.push(String(loginEp.method).toUpperCase() === "GET" ? getFn("beraLogin", rel(loginEp.path)) : sendFn("beraLogin", bodyMethod(loginEp), rel(loginEp.path)));
+  if (registerEp) fns.push(sendFn("beraRegister", bodyMethod(registerEp), rel(registerEp.path)));
+  extraAuth.forEach((e, i) => {
+    const m = String(e.method).toUpperCase();
+    fns.push(m === "GET" ? getFn(`beraAuth_${i}`, rel(e.path)) : sendFn(`beraAuth_${i}`, m, rel(e.path)));
+  });
+
+  const loaders = resInfos.filter(r => r.list).map(r => `${JSON.stringify(r.seg)}: beraLoad_${r.ident}`).join(", ");
+  const creators = resInfos.filter(r => r.create).map(r => `${JSON.stringify(r.seg)}: beraCreate_${r.ident}`).join(", ");
+  return [
+    '<script data-bera-wiring="1">',
+    "(function () {",
+    "'use strict';",
+    ...fns,
+    `var BERA_LOADERS = { ${loaders} };`,
+    `var BERA_CREATORS = { ${creators} };`,
+    `var beraHealthCall = ${hasHealth ? "beraHealth" : "null"};`,
+    `var beraLoginCall = ${loginEp ? "beraLogin" : "null"};`,
+    `var beraRegisterCall = ${registerEp ? "beraRegister" : "null"};`,
+    `var BERA_WIRING = ${JSON.stringify(config)};`,
+    PLATFORM_WIRING_RUNTIME,
+    "})();",
+    "</script>"
+  ].join("\n");
+}
+
+// Inject the platform wiring layer into a generated page. Applied by
+// the build (agentBuild) after generation and before every gate, in
+// fresh builds and edits alike — the layer is idempotent, so
+// re-applying it to an already-wired page is a no-op.
+export function ensurePlatformWiring(html: string, plan: AgentProjectPlan): string {
+  const page = String(html || "");
+  if (!page || page.includes("data-bera-wiring")) return page;
+  const script = platformWiringScript(plan);
+  if (!script) return page;
+  const idx = page.toLowerCase().lastIndexOf("</body>");
+  if (idx >= 0) return page.slice(0, idx) + script + "\n" + page.slice(idx);
+  return page + "\n" + script;
+}
+
 export async function generateFrontend(promptText: string, plan: AgentProjectPlan, log?: (line: string) => void | Promise<void>): Promise<string> {
   const endpointList = plan.endpoints.map(e => `- ${e.method} ${e.path}`).join("\n");
   const attempt = () => stitchCode(
     "System: " + FRONTEND_RULES + "\n\nUser: App: " + plan.appName + " — " + plan.summary + "\nOriginal request: " + promptText + (plan.externalApi ? "\n\nNote: some data comes from an external API, but it ALWAYS reaches this page through the app's own backend endpoints listed below — never call the external API from the browser." : "") + "\n\nBackend API endpoints available:\n" + endpointList,
     "HTML",
     (c) => looksComplete(c),
-    8);
+    8, "frontend");
   let html = await attempt();
   // Persistence, up to 3 total attempts: a page that comes back
   // truncated (the chat endpoints cap every reply, so a long page can
@@ -1013,7 +1478,7 @@ export async function generateFrontend(promptText: string, plan: AgentProjectPla
   // plan line (seen live on a 2-resource coffee-house build).
   for (let attemptNo = 2; attemptNo <= 3 && !looksComplete(html); attemptNo++) {
     await log?.(`Frontend generation attempt ${attemptNo - 1} incomplete (no closing </html>), continuing…`);
-    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8);
+    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8, "frontend");
     if (looksComplete(continued)) { html = continued; break; }
     if (continued.length > html.length) html = continued;
     // Fresh regeneration as this attempt's other half — kept only when
@@ -1047,10 +1512,10 @@ export async function repairFrontend(promptText: string, plan: AgentProjectPlan,
     "\n\nFix ONLY the wiring: add or repair the exact calls and forms the gate lists, keep the design, layout, copy and every working part of the current page. Return the COMPLETE corrected HTML file.\n\nCurrent public/index.html:\n" + current,
     "HTML",
     (c) => looksComplete(c),
-    8);
+    8, "frontend");
   let html = await attempt();
   for (let attemptNo = 2; attemptNo <= 3 && !looksComplete(html); attemptNo++) {
-    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8);
+    const continued = await continueStitching(html, "HTML", (c) => looksComplete(c), 8, "frontend");
     if (looksComplete(continued)) { html = continued; break; }
     if (continued.length > html.length) html = continued;
     const fresh = await attempt();
@@ -1071,7 +1536,7 @@ export async function reviewBackendServer(plan: AgentProjectPlan, serverCode: st
       "System: You are a strict, independent code reviewer for Node.js/Express backends. Reply with ONLY a JSON object: {\"issues\": [string, ...]} — at most 6 short, concrete defects, or an empty array if the code is correct.\n" +
       "Check ONLY these things: (1) every planned endpoint is implemented with the exact method and path; (2) get-one routes use a parameterised path like /api/<resource>/:id; (3) the provided lib/store is required once at the top and every store/collection call is awaited; (4) each resource in the plan uses its own store collection; (5) create answers 201, missing items answer 404; (6) GET /api/health exists; (7) no require() of packages other than express and Node built-ins. Do NOT comment on style, naming or anything else.\n\n" +
       "Planned endpoints:\n" + endpointListText(plan, false) + "\n\nserver.js:\n" + serverCode.slice(0, 9000),
-      90000);
+      90000, "debug");
     const parsed = extractJsonObject(raw);
     if (!parsed || !Array.isArray(parsed.issues)) return [];
     return parsed.issues.map((x: any) => String(x).slice(0, 300)).filter(Boolean).slice(0, 6);
@@ -1091,7 +1556,7 @@ export async function editProjectFiles(instruction: string, plan: AgentProjectPl
       "\n\nReturn the COMPLETE updated server.js. Keep every working endpoint and all working behaviour exactly as it is — change only what the instruction requires.\n\nEndpoints in the plan:\n" + endpointListText(plan, false) +
       "\n\nCurrent server.js:\n" + current.server.slice(0, 9000),
       "server.js",
-      (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500);
+      (c) => c.includes("express") && c.includes("listen") && c.includes("lib/store") && c.length > 500, 5, "code");
     code = stripProseAroundCode(normalizeServerCode(code, plan));
     if (code.includes("express") && code.includes("/api/health") && (await jsParses(code))) server = code;
   } catch { /* keep the current backend */ }
@@ -1103,7 +1568,7 @@ export async function editProjectFiles(instruction: string, plan: AgentProjectPl
       "\n\nReturn the COMPLETE updated HTML file. Keep everything else about the page exactly as it is — change only what the instruction requires.\n\nCurrent public/index.html:\n" + current.frontend.slice(0, 11000),
       "HTML",
       (c) => looksComplete(c),
-      8);
+      8, "frontend");
     if (looksComplete(html)) frontend = normalizeFrontendHtml(html);
   } catch { /* keep the current frontend */ }
   return { server, frontend };
